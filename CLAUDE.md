@@ -22,9 +22,11 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 | `wynki_diag/` | Input CSV data (sensitive, gitignored) |
 | `wyniki_pdf/` | Input PDF data (sensitive, gitignored) |
 | `raport_zdrowotny.html` | Generated output (sensitive, gitignored) |
-| `PLAN_ANALIZY.md` | Original project plan in Polish |
-| `NOTES_PHASE*.md` | Implementation notes per phase |
-| `REVIEW_*.md` | External review findings, responses, and fix plans |
+| `PLAN/` | Plans and reviews, organized by feature and version |
+| `PLAN/ANALIZY/v1/` | Original project plan in Polish |
+| `PLAN/PDF_INGESTION/` | PDF ingestion plans, reviews, validations (v1–v3) |
+| `PLAN/SPECIALIST_RECS/` | Specialist recommendations plan and review |
+| `NOTES/` | Implementation notes per phase (NOTES_PHASE1–6.md) |
 
 ## Tech stack
 
