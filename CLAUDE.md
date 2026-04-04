@@ -16,6 +16,8 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 | File | Description |
 |---|---|
 | `generate_report.py` | Main script (~2180 lines) — all 6 phases |
+| `config.json` | Local config for data paths (gitignored, see `config.example.json`) |
+| `config.example.json` | Example config template with default relative paths |
 | `pdf_parser.py` | PDF extraction layer — OCR (Diagnostyka, Read-Gene) + pdfplumber (Omega) |
 | `marker_catalog.py` | `MARKERS` dict (canonical marker definitions, optimal ranges, units) and `GROUPS` |
 | `report_template.html` | Jinja2 HTML template with Plotly chart rendering |
@@ -43,6 +45,18 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 ```
 
 Output: `raport_zdrowotny.html`
+
+### Configuration
+
+Copy `config.example.json` to `config.json` and adjust paths. All paths can be absolute or relative to the script directory. If `config.json` is absent, defaults to `wynki_diag/` and `wyniki_pdf/` in the project root.
+
+```json
+{
+  "data_dir": "/path/to/wynki_diag",
+  "pdf_dir": "/path/to/wyniki_pdf",
+  "output_path": "raport_zdrowotny.html"
+}
+```
 
 ## Running temporary test scripts
 

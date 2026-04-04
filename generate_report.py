@@ -32,8 +32,30 @@ from marker_catalog import (
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DATA_DIR = Path(__file__).parent / "wynki_diag"
-PDF_DIR = Path(__file__).parent / "wyniki_pdf"
+_SCRIPT_DIR = Path(__file__).parent
+_CONFIG_PATH = _SCRIPT_DIR / "config.json"
+
+def _load_config() -> dict:
+    """Load config.json if present, otherwise use defaults."""
+    if _CONFIG_PATH.exists():
+        try:
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"WARNING: config.json is malformed, using defaults: {e}")
+    return {}
+
+_CFG = _load_config()
+DATA_DIR = Path(_CFG.get("data_dir", _SCRIPT_DIR / "wynki_diag"))
+PDF_DIR = Path(_CFG.get("pdf_dir", _SCRIPT_DIR / "wyniki_pdf"))
+OUTPUT_PATH = Path(_CFG.get("output_path", "raport_zdrowotny.html"))
+if not OUTPUT_PATH.is_absolute():
+    OUTPUT_PATH = _SCRIPT_DIR / OUTPUT_PATH
+
+for _label, _dir in [("data_dir", DATA_DIR), ("pdf_dir", PDF_DIR)]:
+    if not _dir.is_dir():
+        sys.exit(f"ERROR: {_label} directory does not exist: {_dir}")
+
 LOG = logging.getLogger("smartdoc")
 
 # Expected CSV columns
@@ -2298,7 +2320,7 @@ def main():
     # Phase 6: HTML report
     LOG.info("Rendering HTML report...")
     html = render_html(df, status_df, trend_df, rec_df)
-    output_path = Path(__file__).parent / "raport_zdrowotny.html"
+    output_path = OUTPUT_PATH
     output_path.write_text(html, encoding="utf-8")
     LOG.info("Report saved to %s (%d KB)", output_path.name, len(html) // 1024)
 

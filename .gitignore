@@ -15,5 +15,8 @@ _tmp*.py
 PLAN/
 NOTES/
 
+# Local config (contains absolute paths)
+config.json
+
 # Claude Code local settings
 .claude/
