@@ -66,6 +66,22 @@ Per-marker interactive line charts:
 5. **Dead code cleanup (L1/L2)** — Removed unused `band_x0`/`band_x1` variables and no-op NaN loop.
 6. **NaN guard (L3)** — `val_str` now checks `pd.notna(val)` in addition to `val is not None`.
 
+## External review fixes (Phase 6B)
+
+1. **H1: eGFR single-measurement wording** — Added `total_observations` column to trend_df counting all observations including thresholds. Recommendation engine now uses `total_observations` for wording decisions (e.g., "single measurement"), while `n_measurements` remains for regression/confidence. eGFR (7 obs, 6 thresholds) no longer falsely described as single measurement.
+
+2. **H2: Trend arrows contradict delta_pct** — Decoupled mathematical direction (↑/↓ from delta_pct sign) from clinical assessment (✓/✗ from status context). Template renders: `math_arrow delta_pct direction_arrow` in clinical color. E.g., "↑ +9.8% ✗" in red for LDL rising above optimal.
+
+3. **M1: Duplicate bare morphology labels** — `_label()` helper now appends `[unit]` when `expression_type` is abs or pct. E.g., "Neutrofile [tys/µl]" vs "Neutrofile [%]".
+
+4. **M2: Cholesterol reassurance without status check** — Added `_status_of()` helper. Reassurance about "prawidłowym LDL i Apo B" now guarded by actual LDL/Apo B status. When either is above optimal, emits alternative text noting the elevation.
+
+## Re-evaluation fixes (Phase 6B residual)
+
+1. **n_measurements display** (Medium) — Marker table metadata now shows `total_observations` (including thresholds) instead of `n_measurements` (exact values only). eGFR displays `n=7` instead of `n=1`.
+
+2. **Duplicate stable arrow** (Low) — `direction_arrow` suppressed for `"stabilny"` direction to avoid rendering `→ +0.0% →`. Now renders `→ +0.0%`.
+
 ### Deferred items
 - **M2**: Dashboard sub-items (health score, flag list, top-5 priorities) — spec aspirational, current dashboard provides useful summary
 - **M4**: Per-group commentary — would require a rule-based summary engine, out of scope for Phase 6

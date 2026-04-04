@@ -1,5 +1,6 @@
 # Raw and processed health data (sensitive)
 wynki_diag/
+wyniki_pdf/
 raport_zdrowotny.html
 
 # Python

@@ -1858,10 +1858,12 @@ def _build_group_sections(
                 "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
                 "status_icon": _STATUS_ICONS.get(srow["status"], ""),
                 "severity": srow["severity"],
-                "n_measurements": int(trend_row["n_measurements"]) if trend_row is not None else 1,
+                "n_measurements": int(trend_row.get("total_observations", trend_row["n_measurements"])) if trend_row is not None else 1,
                 "direction": trend_row["direction"] if trend_row is not None else "",
-                "direction_arrow": _DIRECTION_ARROWS.get(
-                    trend_row["direction"], "") if trend_row is not None else "",
+                "direction_arrow": (
+                    "" if trend_row["direction"] == "stabilny"
+                    else _DIRECTION_ARROWS.get(trend_row["direction"], "")
+                ) if trend_row is not None else "",
                 "direction_color": _DIRECTION_COLORS.get(
                     trend_row["direction"], "#64748b") if trend_row is not None else "#64748b",
                 "math_arrow": (
@@ -1997,7 +1999,7 @@ def _build_trends_summary(trend_df: pd.DataFrame) -> dict:
                 "delta_pct": f"{dp:+.1f}%",
                 "confidence": r["confidence"],
                 "status": r["status"],
-                "direction_arrow": _DIRECTION_ARROWS.get(r["direction"], ""),
+                "direction_arrow": "" if r["direction"] == "stabilny" else _DIRECTION_ARROWS.get(r["direction"], ""),
                 "math_arrow": "↑" if dp > 0 else "↓" if dp < 0 else "→",
             })
         return items
