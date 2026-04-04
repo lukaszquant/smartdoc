@@ -150,6 +150,22 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
 .rec-meta .escalation { color: var(--c-danger); font-weight: 600; }
 .rec-text { margin-bottom: 4px; }
 .rec-rationale { font-size: 0.85rem; color: var(--c-text-light); font-style: italic; }
+.rec-specialist {
+  margin-top: 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--c-accent);
+}
+.rec-additional-tests {
+  margin-top: 4px;
+  font-size: 0.85rem;
+}
+.rec-additional-tests strong { font-size: 0.82rem; }
+.rec-additional-tests ul {
+  margin: 2px 0 0 18px;
+  padding: 0;
+}
+.rec-additional-tests li { padding: 1px 0; }
 
 /* Trends summary */
 .trend-list { list-style: none; }
@@ -413,6 +429,15 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
     {% for item in cat["items"] %}
     <div class="rec-item {{ item.priority }}">
       <div class="rec-text">{{ item.text }}</div>
+      {% if item.specialist %}
+      <div class="rec-specialist">Zalecany specjalista: {{ item.specialist }}</div>
+      {% endif %}
+      {% if item.additional_tests %}
+      <div class="rec-additional-tests">
+        <strong>Dodatkowe badania przed wizytą:</strong>
+        <ul>{% for test in item.additional_tests %}<li>{{ test }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
       <div class="rec-rationale">{{ item.rationale }}</div>
       <div class="rec-meta">
         <span>Priorytet: {{ item.priority_label }}</span>
