@@ -9,7 +9,11 @@ __pycache__/
 .venv/
 
 # Temporary
-_tmp.py
+_tmp*.py
+
+# Plans, reviews, notes
+PLAN/
+NOTES/
 
 # Claude Code local settings
 .claude/
