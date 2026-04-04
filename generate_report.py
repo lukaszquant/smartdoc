@@ -409,15 +409,39 @@ def consolidate_measurements(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         else:
             # Same-day conflict: different numeric values
             same_day_conflict_removed += n_extra
+
+            # Classify: does the conflict flip the assessed status?
+            cat = MARKERS.get(marker_id, {})
+            opt_low = cat.get("optimal_low")
+            opt_high = cat.get("optimal_high")
+            statuses = set()
+            for _, row in group.iterrows():
+                val = row.get("numeric_value")
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    continue
+                s = assess_status(
+                    val, row.get("comparator", ""),
+                    row.get("lab_low"), row.get("lab_high"),
+                    opt_low, opt_high,
+                )
+                statuses.add(s["status"])
+            is_status_flip = len(statuses) > 1
+
+            source_files = sorted(group["source_file"].dropna().unique())
             conflict_details.append({
                 "marker_id": marker_id,
                 "date": date,
-                "values": list(group["numeric_value"]),
+                "numeric_values": list(group["numeric_value"]),
                 "kept_value": df.loc[latest_idx, "numeric_value"],
                 "n_records": len(group),
+                "statuses": sorted(statuses),
+                "is_status_flip": is_status_flip,
+                "source_files": source_files,
             })
 
-    df = df.loc[sorted(keep_indices)].reset_index(drop=True)
+    df = (df.loc[sorted(keep_indices)]
+          .sort_values("collected_at")
+          .reset_index(drop=True))
 
     # Flag conflict records in quality_flags
     for detail in conflict_details:
@@ -425,9 +449,11 @@ def consolidate_measurements(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
             (df["marker_id"] == detail["marker_id"])
             & (df["collected_date"] == detail["date"])
         )
+        flag = ("same_day_conflict_status_flip" if detail["is_status_flip"]
+                else "same_day_conflict")
         for idx in df[mask].index:
             df.at[idx, "quality_flags"] = _add_quality_flag(
-                df.at[idx, "quality_flags"], "same_day_conflict"
+                df.at[idx, "quality_flags"], flag
             )
 
     n_output = len(df)
@@ -469,8 +495,9 @@ def print_phase2_summary(df: pd.DataFrame, stats: dict) -> None:
         print(f"\n--- Same-day conflicts ({len(conflicts)}) ---")
         for c in conflicts:
             label = MARKERS.get(c["marker_id"], {}).get("label_pl", c["marker_id"])
-            vals = ", ".join(f"{v}" for v in c["values"])
-            print(f"  {label} on {c['date']}: [{vals}] → kept {c['kept_value']}")
+            vals = ", ".join(f"{v}" for v in c["numeric_values"])
+            flip = " ⚠ STATUS FLIP" if c.get("is_status_flip") else ""
+            print(f"  {label} on {c['date']}: [{vals}] → kept {c['kept_value']}{flip}")
 
     # Per-marker final counts
     print(f"\n--- Consolidated marker counts ---")
@@ -541,7 +568,8 @@ def assess_status(
         detail   — optional clarification string
     """
     # No numeric value at all
-    if numeric_value is None:
+    if numeric_value is None or (isinstance(numeric_value, float)
+                                 and np.isnan(numeric_value)):
         return {"status": "BRAK DANYCH", "severity": "unknown",
                 "basis": "data_quality", "detail": ""}
 
@@ -618,16 +646,15 @@ def assess_all_statuses(df: pd.DataFrame) -> pd.DataFrame:
         plus: status, severity, basis, detail, optimal_low, optimal_high,
               source_type, source_label, evidence_level
     """
-    # df is sorted by collected_at — .last() per group gives latest row.
-    # Note: pandas .last() skips NaN for numeric columns, so lab_low/lab_high
-    # may come from an earlier record if the latest has empty lab range.
-    # This is acceptable — lab ranges are stable per marker and the carry-
-    # forward gives better coverage than using only the latest record's range.
+    # df is sorted by collected_at — take the last physical row per marker_id.
+    # We use tail(1) instead of .last() because .last() skips NaN for numeric
+    # columns, which would incorrectly carry forward lab_low/lab_high from
+    # older records when the latest measurement has no lab range.
     latest = (
         df[df["marker_id"].notna()]
         .groupby("marker_id")
-        .last()
-        .reset_index()
+        .tail(1)
+        .reset_index(drop=True)
     )
 
     statuses = []
@@ -2129,7 +2156,7 @@ def _build_recommendations_context(rec_df: pd.DataFrame) -> dict:
     }
 
 
-def _build_quality_context(df: pd.DataFrame) -> dict:
+def _build_quality_context(df: pd.DataFrame, dedup_stats: dict | None = None) -> dict:
     """Build data quality section info."""
     flagged = df[df["quality_flags"] != ""]
     flag_counts: dict[str, int] = {}
@@ -2139,6 +2166,22 @@ def _build_quality_context(df: pd.DataFrame) -> dict:
 
     threshold_markers = df[df["comparator"] != ""]["marker_id"].nunique()
 
+    # Unmapped markers — rows that didn't match any catalog entry
+    unmapped_df = df[df["marker_id"].isna()]
+    unmapped_records = len(unmapped_df)
+    unmapped_labels = sorted(unmapped_df["marker_label_pl"].dropna().unique())
+
+    # Same-day conflict details from consolidation
+    conflict_details = (dedup_stats or {}).get("conflict_details", [])
+    status_flip_conflicts = []
+    for c in conflict_details:
+        if c.get("is_status_flip"):
+            cat = MARKERS.get(c["marker_id"], {})
+            status_flip_conflicts.append({
+                **c,
+                "marker_label": cat.get("label_pl", c["marker_id"]),
+            })
+
     return {
         "total_records": len(df),
         "flagged_records": len(flagged),
@@ -2147,6 +2190,11 @@ def _build_quality_context(df: pd.DataFrame) -> dict:
         "date_min": str(df["collected_date"].min()),
         "date_max": str(df["collected_date"].max()),
         "n_files": df["source_file"].nunique(),
+        "unmapped_records": unmapped_records,
+        "unmapped_marker_count": len(unmapped_labels),
+        "unmapped_marker_labels": unmapped_labels,
+        "conflict_count": len(conflict_details),
+        "status_flip_conflicts": status_flip_conflicts,
     }
 
 
@@ -2188,6 +2236,7 @@ def render_html(
     status_df: pd.DataFrame,
     trend_df: pd.DataFrame,
     rec_df: pd.DataFrame,
+    dedup_stats: dict | None = None,
 ) -> str:
     """Render the full HTML report.
 
@@ -2207,7 +2256,7 @@ def render_html(
         "sections": _build_group_sections(df, status_df, trend_df),
         "trends": _build_trends_summary(trend_df),
         "recommendations": _build_recommendations_context(rec_df),
-        "quality": _build_quality_context(df),
+        "quality": _build_quality_context(df, dedup_stats),
         "groups": GROUPS,
     }
 
@@ -2319,7 +2368,7 @@ def main():
 
     # Phase 6: HTML report
     LOG.info("Rendering HTML report...")
-    html = render_html(df, status_df, trend_df, rec_df)
+    html = render_html(df, status_df, trend_df, rec_df, dedup_stats)
     output_path = OUTPUT_PATH
     output_path.write_text(html, encoding="utf-8")
     LOG.info("Report saved to %s (%d KB)", output_path.name, len(html) // 1024)

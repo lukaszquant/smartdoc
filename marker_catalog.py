@@ -260,6 +260,14 @@ MARKERS: dict[str, dict] = {
         "evidence_level": "high",
         "notes": "hsCRP <1.0 = niskie ryzyko CV",
     },
+    "nt_pro_bnp__direct": {
+        "label_pl": "NT pro-BNP", "group": "lipidy",
+        "unit": "pg/ml", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Marker niewydolności serca; norma lab <125 pg/ml dla osób <75 lat",
+    },
 
     # ======================================================================
     # Węglowodany
@@ -344,6 +352,14 @@ MARKERS: dict[str, dict] = {
     # ======================================================================
     # Tarczyca
     # ======================================================================
+    "ft3__direct": {
+        "label_pl": "FT3", "group": "tarczyca",
+        "unit": "pg/ml", "expression_type": "direct",
+        "optimal_low": 2.5, "optimal_high": 3.5,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Górna połowa normy lab (2.0-4.4); interpretować łącznie z TSH i FT4",
+    },
     "tsh__direct": {
         "label_pl": "TSH", "group": "tarczyca",
         "unit": "µIU/ml", "expression_type": "direct",
@@ -432,10 +448,34 @@ MARKERS: dict[str, dict] = {
         "evidence_level": "high",
         "notes": "",
     },
+    "albumina__direct": {
+        "label_pl": "Albumina", "group": "watroba",
+        "unit": "g/dl", "expression_type": "direct",
+        "optimal_low": 4.0, "optimal_high": 5.0,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Norma lab 3.5-5.2; niska albumina = marker niedożywienia lub zapalenia",
+    },
+    "bialko_calkowite__direct": {
+        "label_pl": "Białko całkowite", "group": "watroba",
+        "unit": "g/dl", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Norma lab 6.4-8.3; interpretować łącznie z albuminą",
+    },
 
     # ======================================================================
     # Nerki
     # ======================================================================
+    "mocznik__direct": {
+        "label_pl": "Mocznik", "group": "nerki",
+        "unit": "mg/dl", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Norma lab 16.6-48.5; interpretować łącznie z kreatyniną i eGFR",
+    },
     "kreatynina__direct": {
         "label_pl": "Kreatynina", "group": "nerki",
         "unit": "mg/dl", "expression_type": "direct",
@@ -456,6 +496,22 @@ MARKERS: dict[str, dict] = {
     # ======================================================================
     # Stan zapalny
     # ======================================================================
+    "ob__direct": {
+        "label_pl": "OB", "group": "zapalenie",
+        "unit": "mm/h", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Odczyn Biernackiego; norma lab 2-12 mm/h dla mężczyzn",
+    },
+    "fibrynogen__direct": {
+        "label_pl": "Fibrynogen", "group": "zapalenie",
+        "unit": "mg/dl", "expression_type": "direct",
+        "optimal_low": 200.0, "optimal_high": 300.0,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Norma lab 180-350; podwyższony = marker zapalny i ryzyko zakrzepowe",
+    },
     "crp__direct": {
         "label_pl": "CRP", "group": "zapalenie",
         "unit": "mg/l", "expression_type": "direct",
@@ -499,6 +555,22 @@ MARKERS: dict[str, dict] = {
         "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
         "evidence_level": "moderate",
         "notes": "",
+    },
+    "ferrytyna__direct": {
+        "label_pl": "Ferrytyna", "group": "mineraly",
+        "unit": "ng/ml", "expression_type": "direct",
+        "optimal_low": 40.0, "optimal_high": 100.0,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Norma lab 30-400; optymalnie 40-100 dla mężczyzn; interpretować łącznie z żelazem i transferyną",
+    },
+    "transferyna__direct": {
+        "label_pl": "Transferyna", "group": "mineraly",
+        "unit": "mg/dl", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Norma lab 200-360; interpretować łącznie z żelazem i ferrytyną",
     },
     "cynk__direct": {
         "label_pl": "Cynk", "group": "mineraly",
@@ -551,6 +623,14 @@ MARKERS: dict[str, dict] = {
         "source_type": "GUIDELINE", "source_label": "Endocrine Society 2024",
         "evidence_level": "high",
         "notes": "Suplementacja D3+K2 w profilu pacjenta",
+    },
+    "witamina_b12__direct": {
+        "label_pl": "Witamina B12", "group": "witaminy",
+        "unit": "pg/ml", "expression_type": "direct",
+        "optimal_low": 400.0, "optimal_high": 800.0,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Norma lab 197-771; optymalnie 400-800; niski B12 + wysoka homocysteina = niedobór funkcjonalny",
     },
 
     # ======================================================================
@@ -855,6 +935,7 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
     ("Homocysteina", "*"):                   "homocysteina__direct",
     ("D-dimer", "*"):                        "d_dimer__direct",
     ("CRP wysokiej czułości", "*"):          "hscrp__direct",
+    ("NT pro-BNP", "*"):                     "nt_pro_bnp__direct",
 
     # Węglowodany
     ("Glukoza", "*"):                        "glukoza__direct",
@@ -872,6 +953,7 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
     # Tarczyca
     ("TSH", "*"):                            "tsh__direct",
     ("FT4", "*"):                            "ft4__direct",
+    ("FT3", "*"):                            "ft3__direct",
 
     # Prostata
     ("PSA", "*"):                            "psa__direct",
@@ -884,12 +966,17 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
     ("Bilirubina całkowita", "*"):           "bilirubina__direct",
     ("GGTP", "*"):                           "ggtp__direct",
     ("Fosfataza zasadowa", "*"):             "fosfataza_zasadowa__direct",
+    ("Albumina", "*"):                       "albumina__direct",
+    ("Białko całkowite", "*"):               "bialko_calkowite__direct",
 
     # Nerki
+    ("Mocznik", "*"):                        "mocznik__direct",
     ("Kreatynina", "*"):                     "kreatynina__direct",
     ("eGFR", "*"):                           "egfr__calculated",
 
     # Stan zapalny
+    ("OB", "*"):                             "ob__direct",
+    ("Fibrynogen", "*"):                     "fibrynogen__direct",
     ("CRP", "*"):                            "crp__direct",
 
     # Minerały
@@ -897,6 +984,8 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
     ("Fosfor nieorganiczny", "*"):           "fosfor__direct",
     ("Magnez", "*"):                         "magnez__direct",
     ("Żelazo", "*"):                         "zelazo__direct",
+    ("Ferrytyna", "*"):                      "ferrytyna__direct",
+    ("Transferyna", "*"):                    "transferyna__direct",
     ("Cynk", "*"):                           "cynk__direct",
     ("Miedź", "*"):                          "miedz__direct",
     ("Selen", "*"):                          "selen__direct",
@@ -905,6 +994,7 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
 
     # Witaminy
     ("Witamina D3 metabolit 25(OH)", "*"):   "witamina_d3__direct",
+    ("Witamina B12", "*"):                   "witamina_b12__direct",
 
     # Metale ciężkie
     ("Arsen we krwi", "*"):                  "arsen__direct",

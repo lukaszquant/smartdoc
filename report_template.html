@@ -476,6 +476,18 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
         <div class="qlabel">Markery z wartościami progowymi</div>
         <strong>{{ quality.threshold_markers }}</strong>
       </div>
+      {% if quality.unmapped_records %}
+      <div class="quality-item">
+        <div class="qlabel">Niezmapowane rekordy</div>
+        <strong>{{ quality.unmapped_records }}</strong>
+      </div>
+      {% endif %}
+      {% if quality.status_flip_conflicts %}
+      <div class="quality-item">
+        <div class="qlabel">Konflikty statusu</div>
+        <strong>{{ quality.status_flip_conflicts|length }}</strong>
+      </div>
+      {% endif %}
     </div>
 
     {% if quality.flag_counts %}
@@ -485,6 +497,44 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
       <tbody>
         {% for flag, count in quality.flag_counts.items() %}
         <tr><td>{{ flag }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if quality.unmapped_records %}
+    <h3 style="margin-top:16px">Niezmapowane badania</h3>
+    <p style="font-size:0.9rem; color:var(--c-text-light)">
+      <strong>{{ quality.unmapped_records }}</strong> rekordów ({{ quality.unmapped_marker_count }} unikalnych parametrów) nie zostało dopasowanych do katalogu markerów i nie jest uwzględnionych w analizie.
+    </p>
+    <div style="font-size:0.85rem; margin-top:8px; columns: 2; column-gap: 24px;">
+      {% for label in quality.unmapped_marker_labels[:30] %}
+      <div style="padding: 2px 0;">{{ label }}</div>
+      {% endfor %}
+      {% if quality.unmapped_marker_labels|length > 30 %}
+      <div style="padding: 2px 0; color: var(--c-text-light);">+ {{ quality.unmapped_marker_labels|length - 30 }} więcej...</div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if quality.status_flip_conflicts %}
+    <h3 style="margin-top:16px">Konflikty zmieniające status</h3>
+    <p style="font-size:0.9rem; color:var(--c-text-light)">
+      <strong>{{ quality.status_flip_conflicts|length }}</strong>
+      {% set n = quality.status_flip_conflicts|length %}
+      {{ "konflikt" if n == 1 else ("konflikty" if 2 <= n <= 4 else "konfliktów") }}
+      tego samego dnia, w których różne wartości prowadzą do różnych ocen statusu. Zachowano wartość z najnowszym znacznikiem czasu.
+    </p>
+    <table class="marker-table" style="max-width:700px; margin-top:8px">
+      <thead><tr><th>Marker</th><th>Data</th><th>Wartości</th><th>Statusy</th></tr></thead>
+      <tbody>
+        {% for c in quality.status_flip_conflicts %}
+        <tr>
+          <td>{{ c.marker_label }}</td>
+          <td>{{ c.date }}</td>
+          <td>{{ c.numeric_values|join(", ") }}</td>
+          <td>{{ c.statuses|join(" / ") }}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
