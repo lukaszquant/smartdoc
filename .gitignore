@@ -1,0 +1,14 @@
+# Raw and processed health data (sensitive)
+wynki_diag/
+raport_zdrowotny.html
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Temporary
+_tmp.py
+
+# Claude Code local settings
+.claude/

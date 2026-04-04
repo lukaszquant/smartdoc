@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raport zdrowotny — {{ report_date }}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+:root {
+  --c-bg: #f8fafc;
+  --c-card: #ffffff;
+  --c-border: #e2e8f0;
+  --c-text: #1e293b;
+  --c-text-light: #64748b;
+  --c-accent: #2563eb;
+  --c-ok: #22c55e;
+  --c-warn: #f97316;
+  --c-danger: #ef4444;
+  --c-yellow: #eab308;
+  --c-muted: #94a3b8;
+  --radius: 8px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--c-bg);
+  color: var(--c-text);
+  line-height: 1.6;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 4px; }
+h2 { font-size: 1.3rem; font-weight: 600; margin: 32px 0 16px; color: var(--c-text); }
+h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
+
+.subtitle { color: var(--c-text-light); font-size: 0.95rem; margin-bottom: 24px; }
+
+/* Cards */
+.card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* Dashboard grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.dash-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+.dash-card .number {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.dash-card .label {
+  font-size: 0.8rem;
+  color: var(--c-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.dash-card.ok .number { color: var(--c-ok); }
+.dash-card.warn .number { color: var(--c-warn); }
+.dash-card.danger .number { color: var(--c-danger); }
+.dash-card.neutral .number { color: var(--c-accent); }
+
+/* Status badges */
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-ok { background: #dcfce7; color: #166534; }
+.badge-granica { background: #fef9c3; color: #854d0e; }
+.badge-opt { background: #ffedd5; color: #9a3412; }
+.badge-normy { background: #fecaca; color: #991b1b; }
+.badge-unknown { background: #f1f5f9; color: #475569; }
+
+/* Marker table */
+.marker-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.marker-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--c-border);
+  color: var(--c-text-light);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.marker-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--c-border);
+  vertical-align: middle;
+}
+.marker-table tr:last-child td { border-bottom: none; }
+.marker-table .val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.marker-table .range { color: var(--c-text-light); font-size: 0.82rem; }
+.marker-table .trend { font-size: 0.82rem; color: var(--c-text-light); }
+
+/* Expandable chart */
+.chart-toggle {
+  cursor: pointer;
+  user-select: none;
+  color: var(--c-accent);
+  font-size: 0.82rem;
+}
+.chart-toggle:hover { text-decoration: underline; }
+.chart-container { display: none; padding: 8px 0; }
+.chart-container.open { display: block; }
+
+/* Recommendations */
+.rec-category { margin-bottom: 24px; }
+.rec-category h3 { margin-bottom: 8px; }
+.rec-item {
+  padding: 12px 16px;
+  border-left: 4px solid var(--c-border);
+  margin-bottom: 8px;
+  background: var(--c-card);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.rec-item.high { border-left-color: var(--c-danger); }
+.rec-item.moderate { border-left-color: var(--c-warn); }
+.rec-item.low { border-left-color: var(--c-muted); }
+.rec-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.78rem;
+  color: var(--c-text-light);
+  margin-top: 6px;
+}
+.rec-meta .escalation { color: var(--c-danger); font-weight: 600; }
+.rec-text { margin-bottom: 4px; }
+.rec-rationale { font-size: 0.85rem; color: var(--c-text-light); font-style: italic; }
+
+/* Trends summary */
+.trend-list { list-style: none; }
+.trend-list li {
+  padding: 4px 0;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trend-arrow { font-weight: 700; width: 24px; text-align: center; }
+.trend-arrow.bad { color: var(--c-danger); }
+.trend-arrow.good { color: var(--c-ok); }
+
+/* Quality section */
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.quality-item { font-size: 0.9rem; }
+.quality-item .qlabel { color: var(--c-text-light); font-size: 0.8rem; }
+
+/* Nav */
+.nav {
+  position: sticky;
+  top: 0;
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-border);
+  padding: 8px 0;
+  margin-bottom: 24px;
+  z-index: 100;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.nav a {
+  display: inline-block;
+  padding: 4px 12px;
+  color: var(--c-text-light);
+  text-decoration: none;
+  font-size: 0.85rem;
+  border-radius: 4px;
+}
+.nav a:hover { background: var(--c-border); color: var(--c-text); }
+
+/* Disclaimer */
+.disclaimer {
+  margin-top: 32px;
+  padding: 16px;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  color: #92400e;
+}
+
+/* Group header */
+.group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.group-stats {
+  font-size: 0.82rem;
+  color: var(--c-text-light);
+}
+.group-stats .attention { color: var(--c-warn); font-weight: 600; }
+
+/* Responsive */
+@media (max-width: 640px) {
+  body { padding: 12px 8px; }
+  .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
+  .marker-table { font-size: 0.8rem; }
+  .marker-table th, .marker-table td { padding: 6px 4px; }
+}
+
+/* Print */
+@media print {
+  .nav { display: none; }
+  .chart-container { display: block !important; }
+  body { max-width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<h1>Raport zdrowotny</h1>
+<p class="subtitle">
+  Wygenerowano: {{ report_date }} &middot;
+  Pacjent: {{ patient.sex }}, {{ patient.age }} lat &middot;
+  Aktywność: {{ patient.activity }} &middot;
+  Dane: {{ quality.date_min }} — {{ quality.date_max }} ({{ quality.n_files }} plików)
+</p>
+
+<!-- ===== NAV ===== -->
+<nav class="nav">
+  <a href="#dashboard">Dashboard</a>
+  {% for section in sections %}
+  <a href="#group-{{ section.group_key }}">{{ section.group_label }}</a>
+  {% endfor %}
+  <a href="#trends">Trendy</a>
+  <a href="#recommendations">Rekomendacje</a>
+  <a href="#quality">Jakość danych</a>
+  <a href="#methodology">Metodologia</a>
+</nav>
+
+<!-- ===== DASHBOARD ===== -->
+<section id="dashboard">
+  <h2>Podsumowanie</h2>
+  <div class="dashboard-grid">
+    <div class="dash-card neutral">
+      <div class="number">{{ dashboard.total_markers }}</div>
+      <div class="label">Markerów</div>
+    </div>
+    <div class="dash-card ok">
+      <div class="number">{{ dashboard.ok_count }}</div>
+      <div class="label">W normie ({{ dashboard.ok_pct }}%)</div>
+    </div>
+    <div class="dash-card warn">
+      <div class="number">{{ dashboard.suboptimal_count }}</div>
+      <div class="label">Poza optimum</div>
+    </div>
+    {% if dashboard.borderline_count %}
+    <div class="dash-card" style="border-top: 3px solid var(--c-yellow)">
+      <div class="number" style="color:var(--c-yellow)">{{ dashboard.borderline_count }}</div>
+      <div class="label">Granica optimum</div>
+    </div>
+    {% endif %}
+    <div class="dash-card danger">
+      <div class="number">{{ dashboard.out_of_lab_count }}</div>
+      <div class="label">Poza normą lab</div>
+    </div>
+    <div class="dash-card danger">
+      <div class="number">{{ dashboard.worsening_count }}</div>
+      <div class="label">Pogorszenie</div>
+    </div>
+    <div class="dash-card ok">
+      <div class="number">{{ dashboard.improving_count }}</div>
+      <div class="label">Poprawa</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PER-GROUP SECTIONS ===== -->
+{% for section in sections %}
+<section id="group-{{ section.group_key }}">
+  <div class="group-header">
+    <h2>{{ section.group_label }}</h2>
+    <span class="group-stats">
+      {{ section.n_markers }} markerów &middot;
+      {{ section.n_ok }} OK
+      {% if section.n_attention %} &middot; <span class="attention">{{ section.n_attention }} wymaga uwagi</span>{% endif %}
+    </span>
+  </div>
+  <div class="card">
+    <table class="marker-table">
+      <thead>
+        <tr>
+          <th>Marker</th>
+          <th>Wynik</th>
+          <th>Norma lab</th>
+          <th>Optimum</th>
+          <th>Status</th>
+          <th>Trend</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in section.markers %}
+        <tr>
+          <td><strong>{{ m.label }}</strong></td>
+          <td class="val">{{ m.value_str }} <span class="range">{{ m.unit }}</span></td>
+          <td class="range">{{ m.lab_range }}</td>
+          <td class="range">{{ m.opt_range }}</td>
+          <td>
+            <span class="badge {% if m.status == 'OK' %}badge-ok{% elif m.status == 'GRANICA OPT' %}badge-granica{% elif 'NORMY' in m.status %}badge-normy{% elif 'OPT' in m.status %}badge-opt{% else %}badge-unknown{% endif %}">
+              {{ m.status_icon }} {{ m.status }}
+            </span>
+          </td>
+          <td class="trend">
+            {% if m.direction %}
+            <span style="color:{{ m.direction_color }}">{{ m.math_arrow }} {{ m.delta_pct }} {{ m.direction_arrow }}</span>
+            <br><span style="font-size:0.75rem">n={{ m.n_measurements }}, {{ m.confidence }}, {{ m.collected_date }}</span>
+            {% else %}<span style="font-size:0.75rem">{{ m.collected_date }}</span>{% endif %}
+          </td>
+          <td>
+            {% if m.chart_html %}
+            <span class="chart-toggle" onclick="toggleChart('{{ m.marker_id }}')">wykres</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% if m.chart_html %}
+        <tr>
+          <td colspan="7" style="padding:0">
+            <div class="chart-container" id="chartbox-{{ m.marker_id }}">
+              {{ m.chart_html|safe }}
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+
+<!-- ===== TRENDS SUMMARY ===== -->
+<section id="trends">
+  <h2>Analiza trendów</h2>
+
+  {% if trends.worsening %}
+  <div class="card">
+    <h3>Trendy pogorszenia ({{ trends.worsening|length }})</h3>
+    <ul class="trend-list">
+      {% for t in trends.worsening %}
+      <li>
+        <span class="trend-arrow bad">{{ t.math_arrow }} {{ t.delta_pct }} {{ t.direction_arrow }}</span>
+        <strong>{{ t.label }}</strong>
+        <span class="range">{{ t.confidence }} &middot; {{ t.status }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if trends.improving %}
+  <div class="card">
+    <h3>Trendy poprawy ({{ trends.improving|length }})</h3>
+    <ul class="trend-list">
+      {% for t in trends.improving %}
+      <li>
+        <span class="trend-arrow good">{{ t.math_arrow }} {{ t.delta_pct }} {{ t.direction_arrow }}</span>
+        <strong>{{ t.label }}</strong>
+        <span class="range">{{ t.confidence }} &middot; {{ t.status }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <p>Stabilne markery: <strong>{{ trends.stable_count }}</strong></p>
+  </div>
+</section>
+
+<!-- ===== RECOMMENDATIONS ===== -->
+<section id="recommendations">
+  <h2>Rekomendacje</h2>
+  <p style="margin-bottom:16px; color:var(--c-text-light); font-size:0.9rem;">
+    Łącznie: {{ recommendations.total }} rekomendacji
+    {% if recommendations.escalation_count %}
+    &middot; <span style="color:var(--c-danger)">{{ recommendations.escalation_count }} wymaga konsultacji lekarskiej</span>
+    {% endif %}
+  </p>
+
+  {% for cat in recommendations.categories %}
+  <div class="rec-category">
+    <h3>{{ cat.label }}</h3>
+    {% for item in cat["items"] %}
+    <div class="rec-item {{ item.priority }}">
+      <div class="rec-text">{{ item.text }}</div>
+      <div class="rec-rationale">{{ item.rationale }}</div>
+      <div class="rec-meta">
+        <span>Priorytet: {{ item.priority_label }}</span>
+        {% if item.evidence %}<span>Źródło: {{ item.evidence }}</span>{% endif %}
+        <span>Pewność: {{ item.confidence }}</span>
+        {% if item.medical_escalation %}<span class="escalation">⚕ Konsultacja lekarska</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</section>
+
+<!-- ===== DATA QUALITY ===== -->
+<section id="quality">
+  <h2>Jakość danych</h2>
+  <div class="card">
+    <div class="quality-grid">
+      <div class="quality-item">
+        <div class="qlabel">Łączne rekordy</div>
+        <strong>{{ quality.total_records }}</strong>
+      </div>
+      <div class="quality-item">
+        <div class="qlabel">Pliki źródłowe</div>
+        <strong>{{ quality.n_files }}</strong>
+      </div>
+      <div class="quality-item">
+        <div class="qlabel">Zakres dat</div>
+        <strong>{{ quality.date_min }} — {{ quality.date_max }}</strong>
+      </div>
+      <div class="quality-item">
+        <div class="qlabel">Rekordy z flagami</div>
+        <strong>{{ quality.flagged_records }}</strong>
+      </div>
+      <div class="quality-item">
+        <div class="qlabel">Markery z wartościami progowymi</div>
+        <strong>{{ quality.threshold_markers }}</strong>
+      </div>
+    </div>
+
+    {% if quality.flag_counts %}
+    <h3 style="margin-top:16px">Flagi jakości</h3>
+    <table class="marker-table" style="max-width:400px">
+      <thead><tr><th>Flaga</th><th>Liczba</th></tr></thead>
+      <tbody>
+        {% for flag, count in quality.flag_counts.items() %}
+        <tr><td>{{ flag }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ===== METHODOLOGY ===== -->
+<section id="methodology">
+  <h2>Metodologia i źródła</h2>
+  <div class="card">
+    <h3>Katalog markerów</h3>
+    <p>Analiza obejmuje <strong>{{ dashboard.total_markers }}</strong> markerów z zakresami optymalnymi opartymi na wytycznych klinicznych (ESC/EAS 2021, KDIGO 2024, Endocrine Society 2024, ATA 2017, ADA) oraz heurystykach medycyny prewencyjnej.</p>
+
+    <h3>Statusy</h3>
+    <table class="marker-table" style="max-width:600px">
+      <thead><tr><th>Status</th><th>Znaczenie</th><th>Istotność</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-ok">✓ OK</span></td><td>W zakresie optymalnym</td><td>Brak</td></tr>
+        <tr><td><span class="badge badge-granica">~ GRANICA OPT</span></td><td>Tuż przy granicy optimum</td><td>Niska</td></tr>
+        <tr><td><span class="badge badge-opt">↑↓ POZA OPT</span></td><td>Poza zakresem optymalnym, w normie lab</td><td>Umiarkowana</td></tr>
+        <tr><td><span class="badge badge-normy">⬆⬇ POZA NORMY</span></td><td>Poza zakresem referencyjnym laboratorium</td><td>Wysoka</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Analiza trendów</h3>
+    <p>Regresja liniowa na wszystkich pomiarach z wyłączeniem wartości progowych (&lt;, &gt;). Kierunek interpretowany w kontekście aktualnego statusu — spadek wartości poniżej normy = pogorszenie, nie poprawa.</p>
+    <table class="marker-table" style="max-width:500px">
+      <thead><tr><th>Pewność</th><th>Kryteria</th></tr></thead>
+      <tbody>
+        <tr><td>Wysoka</td><td>n ≥ 5, R² ≥ 0.3, zakres ≥ 365 dni</td></tr>
+        <tr><td>Umiarkowana</td><td>n ≥ 3</td></tr>
+        <tr><td>Niska</td><td>n = 2</td></tr>
+        <tr><td>Brak</td><td>Pojedynczy pomiar</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Zasady konsolidacji</h3>
+    <p>Duplikaty usuwane wg: (1) identyczne rekordy, (2) powtórzenia tego samego dnia z tą samą wartością, (3) konflikty tego samego dnia — zachowany najnowszy timestamp z flagą jakości.</p>
+  </div>
+</section>
+
+<!-- ===== DISCLAIMER ===== -->
+<div class="disclaimer">
+  <strong>⚠ Zastrzeżenie prawne:</strong> Niniejszy raport ma charakter wyłącznie informacyjny i NIE stanowi diagnozy medycznej. Wyniki badań laboratoryjnych powinny być interpretowane przez lekarza w kontekście pełnego obrazu klinicznego pacjenta. Zakresy optymalne oparte są na aktualnych wytycznych klinicznych i literaturze medycyny prewencyjnej, ale mogą nie uwzględniać indywidualnych czynników zdrowotnych. Przed podjęciem jakichkolwiek decyzji zdrowotnych (zmiana suplementacji, diety, stylu życia) należy skonsultować się z lekarzem.
+</div>
+
+<p style="text-align:center; margin-top:24px; color:var(--c-muted); font-size:0.8rem;">
+  Wygenerowano automatycznie przez SmartDoc &middot; {{ report_date }}
+</p>
+
+<script>
+function toggleChart(markerId) {
+  var el = document.getElementById('chartbox-' + markerId);
+  if (el) {
+    el.classList.toggle('open');
+    // Trigger Plotly resize when opening
+    if (el.classList.contains('open')) {
+      var plots = el.querySelectorAll('.plotly-graph-div');
+      plots.forEach(function(p) { Plotly.Plots.resize(p); });
+    }
+  }
+}
+</script>
+</body>
+</html>
