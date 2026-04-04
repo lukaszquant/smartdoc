@@ -25,12 +25,15 @@ import pandas as pd
 import plotly.graph_objects as go
 from jinja2 import Environment, FileSystemLoader
 
-from marker_catalog import GROUPS, MARKERS, resolve_marker_id
+from marker_catalog import (
+    GROUPS, GROUP_SPECIALIST, MARKER_SPECIALIST, MARKERS, resolve_marker_id,
+)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(__file__).parent / "wynki_diag"
+PDF_DIR = Path(__file__).parent / "wyniki_pdf"
 LOG = logging.getLogger("smartdoc")
 
 # Expected CSV columns
@@ -146,7 +149,25 @@ def load_raw_data(directory: Path = DATA_DIR) -> pd.DataFrame:
         "Opis": "source_notes",
     })
 
+    raw["source_origin"] = "csv"
+
     return raw
+
+
+def load_all_data() -> pd.DataFrame:
+    """Load CSV data and, if available, PDF data; return combined DataFrame."""
+    csv_df = load_raw_data()
+    if PDF_DIR.exists():
+        from pdf_parser import load_pdf_data
+        pdf_df = load_pdf_data(PDF_DIR)
+        if not pdf_df.empty:
+            LOG.info("PDF data: %d rows from %d files",
+                     len(pdf_df), pdf_df["source_file"].nunique())
+            combined = pd.concat([csv_df, pdf_df], ignore_index=True)
+            return combined
+        else:
+            LOG.info("PDF directory exists but yielded no data")
+    return csv_df
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +284,7 @@ def normalize_records(raw: pd.DataFrame) -> pd.DataFrame:
             "source_order_id":  row["source_order_id"],
             "source_badanie":   row["source_badanie"],
             "source_notes":     notes,
+            "source_origin":    row.get("source_origin", "csv"),
             "quality_flags":    ";".join(quality_flags) if quality_flags else "",
         })
 
@@ -317,6 +339,24 @@ def consolidate_measurements(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.drop_duplicates(subset=dedup_cols, keep="first").reset_index(drop=True)
     n_after_exact = len(df)
     n_exact_removed = n_input - n_after_exact
+
+    # --- Step 1b: CSV-preference for cross-source overlaps ------------------
+    n_before_source_pref = len(df)
+    if "source_origin" in df.columns:
+        has_origin = ~df["marker_id"].isna() & ~df["collected_date"].isna()
+        origin_groups = df[has_origin].groupby(["marker_id", "collected_date"], sort=False)
+        drop_indices = []
+        for (_mid, _dt), grp in origin_groups:
+            origins = grp["source_origin"].unique()
+            if len(origins) > 1 and "csv" in origins:
+                # Keep only CSV rows when both CSV and PDF exist for same marker+day
+                pdf_rows = grp[grp["source_origin"] == "pdf"].index
+                drop_indices.extend(pdf_rows)
+        if drop_indices:
+            df = df.drop(index=drop_indices).reset_index(drop=True)
+    n_source_pref_removed = n_before_source_pref - len(df)
+    if n_source_pref_removed:
+        LOG.info("CSV-preference dedup: removed %d PDF overlap rows", n_source_pref_removed)
 
     # --- Step 2 & 3: Same-day consolidation ---------------------------------
     keep_indices = []
@@ -373,6 +413,7 @@ def consolidate_measurements(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     stats = {
         "n_input": n_input,
         "n_exact_removed": n_exact_removed,
+        "n_source_pref_removed": n_source_pref_removed,
         "n_after_exact": n_after_exact,
         "n_same_day_repeat_removed": same_day_repeat_removed,
         "n_same_day_conflict_removed": same_day_conflict_removed,
@@ -380,8 +421,8 @@ def consolidate_measurements(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "conflict_details": conflict_details,
     }
 
-    LOG.info("Consolidation: %d → %d records (-%d exact, -%d repeat, -%d conflict)",
-             n_input, n_output, n_exact_removed,
+    LOG.info("Consolidation: %d → %d records (-%d exact, -%d source_pref, -%d repeat, -%d conflict)",
+             n_input, n_output, n_exact_removed, n_source_pref_removed,
              same_day_repeat_removed, same_day_conflict_removed)
 
     return df, stats
@@ -958,6 +999,8 @@ def _rec(
     evidence: str = "",
     medical_escalation: bool = False,
     confidence: str = "moderate",
+    specialist_pl: str = "",
+    additional_tests_pl: list[str] | None = None,
 ) -> dict:
     """Build a recommendation dict."""
     return {
@@ -969,7 +1012,69 @@ def _rec(
         "evidence": evidence,
         "confidence": confidence,
         "medical_escalation": medical_escalation,
+        "specialist_pl": specialist_pl,
+        "additional_tests_pl": additional_tests_pl or [],
     }
+
+
+def _norm_label(s: str) -> str:
+    """Normalize a label for exact matching: lowercase + trim + collapse whitespace."""
+    return " ".join(s.strip().lower().split())
+
+
+def _filter_tests(
+    tests: list[dict],
+    tested_ids: set[str],
+    tested_labels_norm: set[str],
+) -> list[str]:
+    """Filter additional tests against already-tested markers.
+
+    Returns display labels of tests that should still be recommended.
+    """
+    result = []
+    for t in tests:
+        mid = t.get("marker_id")
+        if mid and mid in tested_ids:
+            continue
+        aliases = t.get("filter_aliases") or []
+        if any(_norm_label(alias) in tested_labels_norm for alias in aliases):
+            continue
+        result.append(t["label_pl"])
+    return result
+
+
+def _resolve_specialist_recs(
+    group: str,
+    markers: list[str],
+    tested_marker_ids: set[str],
+    tested_labels_norm: set[str],
+) -> list[tuple[str, list[str], list[str]]]:
+    """Return list of (specialist_pl, marker_subset, filtered_test_labels).
+
+    One entry per distinct specialist. Splits markers in mixed-specialist groups.
+    """
+    # Partition markers: those with marker-level override vs group fallback
+    specialist_buckets: dict[str, tuple[list[str], list[dict]]] = {}
+
+    for mid in markers:
+        override = MARKER_SPECIALIST.get(mid)
+        if override:
+            spec = override["specialist_pl"]
+            tests = override.get("additional_tests", [])
+        else:
+            grp_info = GROUP_SPECIALIST.get(group, {})
+            spec = grp_info.get("specialist_pl", "")
+            tests = grp_info.get("additional_tests", [])
+
+        if spec not in specialist_buckets:
+            specialist_buckets[spec] = ([], tests)
+        specialist_buckets[spec][0].append(mid)
+
+    result = []
+    for spec, (spec_markers, tests) in specialist_buckets.items():
+        filtered = _filter_tests(tests, tested_marker_ids, tested_labels_norm)
+        result.append((spec, spec_markers, filtered))
+    return result
 
 
 def generate_recommendations(
@@ -1027,96 +1132,8 @@ def generate_recommendations(
     # ===================================================================
     # MEDICAL — all markers outside lab range → consult doctor
     # ===================================================================
-    out_of_lab = status_df[
-        status_df["status"].isin(["PONIŻEJ NORMY", "POWYŻEJ NORMY"])
-    ]
-    if len(out_of_lab):
-        # Group by group for cleaner output
-        for group, grp_rows in out_of_lab.groupby("group"):
-            markers = list(grp_rows["marker_id"])
-            labels = [_label(m) for m in markers]
-            statuses = [grp_rows[grp_rows["marker_id"] == m].iloc[0]["status"]
-                        for m in markers]
-            details = ", ".join(
-                f"{lab} ({st.lower()})" for lab, st in zip(labels, statuses)
-            )
 
-            # Check if any have worsening trend (cache trend lookups)
-            trend_cache = {m: _trend(m) for m in markers}
-            worsening = [
-                m for m in markers
-                if (trend_cache[m] is not None
-                    and trend_cache[m]["direction"] == "pogorszenie"
-                    and trend_cache[m]["confidence"] in ("moderate", "high"))
-            ]
-
-            priority = _PRIORITY_HIGH if worsening else _PRIORITY_MODERATE
-            trend_note = ""
-            if worsening:
-                trend_note = (
-                    " Trend pogorszenia potwierdzony dla: "
-                    + ", ".join(_label(m) for m in worsening)
-                    + "."
-                )
-
-            # M2/M3: Add nuance for borderline or clinically benign cases
-            nuance = ""
-            if ("testosteron__direct" in markers
-                    and "testosteron__direct" in worsening):
-                nuance += (
-                    " Uwaga: wysoki testosteron u aktywnego mężczyzny "
-                    "42 lat może być fizjologicznie prawidłowy — "
-                    "ocenić klinicznie."
-                )
-            # Cholesterol barely above lab range — soften only if LDL and Apo B
-            # are actually within acceptable range (OK or OPT-level status)
-            if "cholesterol_calkowity__direct" in markers and len(markers) == 1:
-                ch_val = _latest("cholesterol_calkowity__direct")
-                ch_rows = status_df[
-                    status_df["marker_id"] == "cholesterol_calkowity__direct"
-                ]
-                if ch_val is not None and len(ch_rows):
-                    ch_high = ch_rows.iloc[0]["lab_high"]
-                    # Check LDL and Apo B status
-                    _ok_statuses = {"OK", "GRANICA OPT"}
-                    ldl_status = _status_of("cholesterol_ldl__direct")
-                    apob_status = _status_of("apo_b__direct")
-                    ldl_ok = ldl_status in _ok_statuses
-                    apob_ok = apob_status in _ok_statuses
-                    if ch_high and ch_val < ch_high * 1.02:
-                        if ldl_ok and apob_ok:
-                            nuance += (
-                                " Wartość minimalnie powyżej górnej granicy "
-                                "normy — klinicznie mało istotne przy "
-                                "prawidłowym LDL i Apo B."
-                            )
-                            priority = _PRIORITY_LOW
-                        else:
-                            nuance += (
-                                " Wartość minimalnie powyżej górnej granicy "
-                                "normy, jednak LDL i/lub Apo B powyżej "
-                                "optimum — ocenić łącznie profil lipidowy."
-                            )
-
-            group_label = GROUPS.get(group, group)
-            recs.append(_rec(
-                category=_CAT_MEDICAL,
-                priority=priority,
-                marker_ids=markers,
-                text_pl=(
-                    f"Omówić z lekarzem wyniki spoza normy laboratoryjnej "
-                    f"({group_label}): {details}.{trend_note}{nuance}"
-                ),
-                rationale_pl=(
-                    f"Wartości poza zakresem referencyjnym laboratorium "
-                    f"wymagają oceny klinicznej."
-                ),
-                evidence="Norma laboratoryjna",
-                medical_escalation=True,
-                confidence="high",
-            ))
-
-    # --- CBC declining pattern — extra emphasis ---
+    # Pre-compute CBC declining pattern for deduplication
     cbc_declining = ["leukocyty__abs", "limfocyty__abs", "neutrofile__abs"]
     cbc_bad = [
         m for m in cbc_declining
@@ -1125,7 +1142,134 @@ def generate_recommendations(
             and _trend(m)["direction"] == "pogorszenie"
             and _trend(m)["confidence"] in ("moderate", "high"))
     ]
+    suppressed_generic_markers = set(cbc_bad) if len(cbc_bad) >= 2 else set()
+
+    # Build sets for additional-test filtering
+    tested_marker_ids = set(status_df["marker_id"])
+    tested_labels_norm = {
+        _norm_label(MARKERS[mid].get("label_pl", ""))
+        for mid in tested_marker_ids
+        if mid in MARKERS and MARKERS[mid].get("label_pl")
+    }
+
+    out_of_lab = status_df[
+        status_df["status"].isin(["PONIŻEJ NORMY", "POWYŻEJ NORMY"])
+    ]
+    if len(out_of_lab):
+        for group, grp_rows in out_of_lab.groupby("group"):
+            markers = list(grp_rows["marker_id"])
+
+            # Suppress markers handled by the CBC escalation rec
+            markers = [m for m in markers if m not in suppressed_generic_markers]
+            if not markers:
+                continue
+
+            # Resolve specialist routing (may split into multiple recs)
+            spec_recs = _resolve_specialist_recs(
+                group, markers, tested_marker_ids, tested_labels_norm,
+            )
+
+            for specialist_pl, spec_markers, extra_tests in spec_recs:
+                spec_labels = [_label(m) for m in spec_markers]
+                spec_statuses = [
+                    grp_rows[grp_rows["marker_id"] == m].iloc[0]["status"]
+                    for m in spec_markers
+                ]
+                details = ", ".join(
+                    f"{lab} ({st.lower()})"
+                    for lab, st in zip(spec_labels, spec_statuses)
+                )
+
+                trend_cache = {m: _trend(m) for m in spec_markers}
+                worsening = [
+                    m for m in spec_markers
+                    if (trend_cache[m] is not None
+                        and trend_cache[m]["direction"] == "pogorszenie"
+                        and trend_cache[m]["confidence"] in ("moderate", "high"))
+                ]
+
+                priority = _PRIORITY_HIGH if worsening else _PRIORITY_MODERATE
+                trend_note = ""
+                if worsening:
+                    trend_note = (
+                        " Trend pogorszenia potwierdzony dla: "
+                        + ", ".join(_label(m) for m in worsening)
+                        + "."
+                    )
+
+                nuance = ""
+                if ("testosteron__direct" in spec_markers
+                        and "testosteron__direct" in worsening):
+                    nuance += (
+                        " Uwaga: wysoki testosteron u aktywnego mężczyzny "
+                        "42 lat może być fizjologicznie prawidłowy — "
+                        "ocenić klinicznie."
+                    )
+                if ("cholesterol_calkowity__direct" in spec_markers
+                        and len(spec_markers) == 1):
+                    ch_val = _latest("cholesterol_calkowity__direct")
+                    ch_rows = status_df[
+                        status_df["marker_id"] == "cholesterol_calkowity__direct"
+                    ]
+                    if ch_val is not None and len(ch_rows):
+                        ch_high = ch_rows.iloc[0]["lab_high"]
+                        _ok_statuses = {"OK", "GRANICA OPT"}
+                        ldl_status = _status_of("cholesterol_ldl__direct")
+                        apob_status = _status_of("apo_b__direct")
+                        ldl_ok = ldl_status in _ok_statuses
+                        apob_ok = apob_status in _ok_statuses
+                        if ch_high and ch_val < ch_high * 1.02:
+                            if ldl_ok and apob_ok:
+                                nuance += (
+                                    " Wartość minimalnie powyżej górnej "
+                                    "granicy normy — klinicznie mało istotne "
+                                    "przy prawidłowym LDL i Apo B."
+                                )
+                                priority = _PRIORITY_LOW
+                            else:
+                                nuance += (
+                                    " Wartość minimalnie powyżej górnej "
+                                    "granicy normy, jednak LDL i/lub Apo B "
+                                    "powyżej optimum — ocenić łącznie profil "
+                                    "lipidowy."
+                                )
+
+                group_label = GROUPS.get(group, group)
+                if specialist_pl:
+                    text = (
+                        f"Konsultacja — {specialist_pl}: wyniki spoza normy "
+                        f"laboratoryjnej ({group_label}): "
+                        f"{details}.{trend_note}{nuance}"
+                    )
+                else:
+                    text = (
+                        f"Omówić z lekarzem wyniki spoza normy laboratoryjnej "
+                        f"({group_label}): {details}.{trend_note}{nuance}"
+                    )
+
+                recs.append(_rec(
+                    category=_CAT_MEDICAL,
+                    priority=priority,
+                    marker_ids=spec_markers,
+                    text_pl=text,
+                    rationale_pl=(
+                        "Wartości poza zakresem referencyjnym laboratorium "
+                        "wymagają oceny klinicznej."
+                    ),
+                    evidence="Norma laboratoryjna",
+                    medical_escalation=True,
+                    confidence="high",
+                    specialist_pl=specialist_pl,
+                    additional_tests_pl=extra_tests,
+                ))
+
+    # --- CBC declining pattern — extra emphasis ---
     if len(cbc_bad) >= 2:
+        cbc_extra_tests = _filter_tests(
+            GROUP_SPECIALIST.get("morfologia", {}).get("additional_tests", []),
+            tested_marker_ids,
+            tested_labels_norm,
+        )
         recs.append(_rec(
             category=_CAT_MEDICAL,
             priority=_PRIORITY_HIGH,
@@ -1145,6 +1289,8 @@ def generate_recommendations(
             evidence="Kliniczna ocena morfologii",
             medical_escalation=True,
             confidence="high",
+            specialist_pl="hematolog",
+            additional_tests_pl=cbc_extra_tests,
         ))
 
     # ===================================================================
@@ -1577,7 +1723,8 @@ def generate_recommendations(
     return pd.DataFrame(recs) if recs else pd.DataFrame(
         columns=["category", "priority", "marker_ids", "text_pl",
                  "rationale_pl", "evidence", "confidence",
-                 "medical_escalation"]
+                 "medical_escalation", "specialist_pl",
+                 "additional_tests_pl"]
     )
 
 
@@ -1935,7 +2082,7 @@ def _build_recommendations_context(rec_df: pd.DataFrame) -> dict:
             continue
         items = []
         for _, row in cat_recs.iterrows():
-            items.append({
+            item = {
                 "priority": row["priority"],
                 "priority_label": _PRIORITY_LABELS_PL.get(row["priority"], row["priority"]),
                 "text": row["text_pl"],
@@ -1943,7 +2090,10 @@ def _build_recommendations_context(rec_df: pd.DataFrame) -> dict:
                 "evidence": row["evidence"],
                 "medical_escalation": bool(row["medical_escalation"]),
                 "confidence": row["confidence"],
-            })
+                "specialist": row.get("specialist_pl", ""),
+                "additional_tests": row.get("additional_tests_pl", []),
+            }
+            items.append(item)
         categories.append({
             "key": cat,
             "label": _CATEGORY_LABELS_PL.get(cat, cat),
@@ -2117,8 +2267,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     # Phase 1: Ingest & normalize
-    LOG.info("Loading raw data from %s", DATA_DIR)
-    raw = load_raw_data()
+    LOG.info("Loading raw data from %s (+ %s)", DATA_DIR, PDF_DIR)
+    raw = load_all_data()
     LOG.info("Raw rows: %d from %d files", len(raw), raw["source_file"].nunique())
 
     LOG.info("Normalizing records...")

@@ -49,7 +49,129 @@ GROUPS = {
     "mineraly":     "Minerały i elektrolity",
     "witaminy":     "Witaminy",
     "metale":       "Metale ciężkie",
+    "kwasy_tluszczowe": "Kwasy tłuszczowe / Omega",
     "morfologia":   "Morfologia",
+}
+
+# ---------------------------------------------------------------------------
+# Specialist routing — marker-level overrides + group-level fallback
+# ---------------------------------------------------------------------------
+
+# Marker-level overrides for heterogeneous groups (e.g. lipidy contains
+# D-dimer, homocysteina, hsCRP alongside actual lipid markers).
+MARKER_SPECIALIST: dict[str, dict] = {
+    "homocysteina__direct": {
+        "specialist_pl": "internista",
+        "additional_tests": [
+            {"label_pl": "Witamina B12", "filter_aliases": ["Witamina B12", "B12"]},
+            {"label_pl": "Kwas foliowy", "filter_aliases": ["Kwas foliowy", "Folian"]},
+            {"label_pl": "Witamina B6", "filter_aliases": ["Witamina B6", "B6"]},
+        ],
+    },
+    "d_dimer__direct": {
+        "specialist_pl": "internista / angiolog",
+        "additional_tests": [
+            {"label_pl": "Fibrynogen", "filter_aliases": ["Fibrynogen"]},
+            {"label_pl": "USG żył kończyn dolnych"},
+        ],
+    },
+    "hscrp__direct": {
+        "specialist_pl": "internista / reumatolog",
+        "additional_tests": [
+            {"label_pl": "OB (odczyn Biernackiego)", "filter_aliases": ["OB", "Odczyn Biernackiego", "OB (odczyn Biernackiego)"]},
+            {"label_pl": "Prokalcytonina", "filter_aliases": ["Prokalcytonina"]},
+        ],
+    },
+}
+
+# Group-level fallback: used when no marker-level override exists.
+# Groups omitted here keep generic "Omówić z lekarzem" with no specialist.
+GROUP_SPECIALIST: dict[str, dict] = {
+    "lipidy": {
+        "specialist_pl": "kardiolog",
+        "additional_tests": [
+            {"label_pl": "Lp(a) — lipoproteina(a)", "filter_aliases": ["Lp(a)", "Lipoproteina(a)", "Lp(a) — lipoproteina(a)"]},
+            {"label_pl": "ApoA1", "filter_aliases": ["ApoA1", "Apo A1"]},
+            {"label_pl": "Profil lipidowy rozszerzony (frakcje LDL)"},
+        ],
+    },
+    "weglowodany": {
+        "specialist_pl": "diabetolog / endokrynolog",
+        "additional_tests": [
+            {"label_pl": "Insulina na czczo", "filter_aliases": ["Insulina", "Insulina na czczo"]},
+            {"label_pl": "HOMA-IR (obliczeniowy)", "filter_aliases": ["HOMA-IR"]},
+            {"label_pl": "Peptyd C", "filter_aliases": ["Peptyd C"]},
+            {"label_pl": "OGTT (test obciążenia glukozą)"},
+        ],
+    },
+    "hormony": {
+        "specialist_pl": "endokrynolog / androlog",
+        "additional_tests": [
+            {"label_pl": "Estradiol", "filter_aliases": ["Estradiol"]},
+            {"label_pl": "DHEA-S", "filter_aliases": ["DHEA-S", "DHEAS"]},
+            {"label_pl": "Kortyzol poranny", "filter_aliases": ["Kortyzol", "Kortyzol poranny"]},
+        ],
+    },
+    "tarczyca": {
+        "specialist_pl": "endokrynolog",
+        "additional_tests": [
+            {"label_pl": "FT3", "filter_aliases": ["FT3", "fT3"]},
+            {"label_pl": "Anty-TPO", "filter_aliases": ["Anty-TPO", "Anty TPO"]},
+            {"label_pl": "Anty-TG", "filter_aliases": ["Anty-TG", "Anty TG"]},
+            {"label_pl": "USG tarczycy"},
+        ],
+    },
+    "prostata": {
+        "specialist_pl": "urolog",
+        "additional_tests": [
+            {"label_pl": "mpMRI prostaty (przy podwyższonym PSA)"},
+            {"label_pl": "PHI (Prostate Health Index)"},
+        ],
+    },
+    "watroba": {
+        "specialist_pl": "gastroenterolog / hepatolog",
+        "additional_tests": [
+            {"label_pl": "Albumina", "filter_aliases": ["Albumina"]},
+            {"label_pl": "Bilirubina bezpośrednia", "filter_aliases": ["Bilirubina bezpośrednia"]},
+            {"label_pl": "Bilirubina pośrednia", "filter_aliases": ["Bilirubina pośrednia"]},
+            {"label_pl": "USG jamy brzusznej"},
+            {"label_pl": "FibroScan / FIB-4 (przy przewlekłym podwyższeniu)"},
+        ],
+    },
+    "nerki": {
+        "specialist_pl": "nefrolog",
+        "additional_tests": [
+            {"label_pl": "Cystatyna C", "filter_aliases": ["Cystatyna C"]},
+            {"label_pl": "Badanie ogólne moczu"},
+            {"label_pl": "ACR (albumina/kreatynina w moczu)"},
+        ],
+    },
+    "zapalenie": {
+        "specialist_pl": "internista / reumatolog",
+        "additional_tests": [
+            {"label_pl": "OB (odczyn Biernackiego)", "filter_aliases": ["OB", "Odczyn Biernackiego", "OB (odczyn Biernackiego)"]},
+            {"label_pl": "Prokalcytonina", "filter_aliases": ["Prokalcytonina"]},
+            {"label_pl": "Ferrytyna", "filter_aliases": ["Ferrytyna"]},
+        ],
+    },
+    "metale": {
+        "specialist_pl": "toksykolog / internista",
+        "additional_tests": [
+            {"label_pl": "Metale ciężkie w moczu (prowokowany)"},
+        ],
+    },
+    "morfologia": {
+        "specialist_pl": "hematolog",
+        "additional_tests": [
+            {"label_pl": "Rozmaz krwi obwodowej (manualny)"},
+            {"label_pl": "Retikulocyty", "filter_aliases": ["Retikulocyty"]},
+            {"label_pl": "Ferrytyna", "filter_aliases": ["Ferrytyna"]},
+            {"label_pl": "Żelazo", "marker_id": "zelazo__direct"},
+            {"label_pl": "TIBC", "filter_aliases": ["TIBC"]},
+            {"label_pl": "Witamina B12", "filter_aliases": ["Witamina B12", "B12"]},
+            {"label_pl": "Kwas foliowy", "filter_aliases": ["Kwas foliowy", "Folian"]},
+        ],
+    },
 }
 
 # Catalog-wide review date
@@ -460,6 +582,50 @@ MARKERS: dict[str, dict] = {
     },
 
     # ======================================================================
+    # Kwasy tłuszczowe / Omega
+    # ======================================================================
+    "indeks_omega3__direct": {
+        "label_pl": "Indeks Omega-3", "group": "kwasy_tluszczowe",
+        "unit": "%", "expression_type": "direct",
+        "optimal_low": 8.0, "optimal_high": None,
+        "source_type": "GUIDELINE", "source_label": "Harris & von Schacky 2004",
+        "evidence_level": "high",
+        "notes": ">8% = najniższe ryzyko chorób sercowo-naczyniowych; 4-8% średnio korzystny; <4% niekorzystny",
+    },
+    "aa_epa__ratio": {
+        "label_pl": "AA/EPA", "group": "kwasy_tluszczowe",
+        "unit": "ratio", "expression_type": "ratio",
+        "optimal_low": 1.5, "optimal_high": 3.0,
+        "source_type": "GUIDELINE", "source_label": "Omega test guidelines",
+        "evidence_level": "moderate",
+        "notes": "1.5-3 = niski poziom stanu zapalnego; 3-6 = umiarkowany; >7 = podwyższony",
+    },
+    "omega6_omega3__ratio": {
+        "label_pl": "Omega-6/Omega-3", "group": "kwasy_tluszczowe",
+        "unit": "ratio", "expression_type": "ratio",
+        "optimal_low": 3.5, "optimal_high": 5.5,
+        "source_type": "GUIDELINE", "source_label": "Omega test guidelines",
+        "evidence_level": "moderate",
+        "notes": "3.5-5.5 = korzystny stosunek omega-6 do omega-3",
+    },
+    "indeks_tluszczow_trans__direct": {
+        "label_pl": "Indeks tłuszczów trans", "group": "kwasy_tluszczowe",
+        "unit": "%", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 2.0,
+        "source_type": "GUIDELINE", "source_label": "Omega test guidelines",
+        "evidence_level": "moderate",
+        "notes": "<2% = korzystny; 2-2.5% = średnio korzystny; >2.5% = niekorzystny",
+    },
+    "nkt_jnkt__ratio": {
+        "label_pl": "NKT/JNKT", "group": "kwasy_tluszczowe",
+        "unit": "ratio", "expression_type": "ratio",
+        "optimal_low": 1.7, "optimal_high": 2.0,
+        "source_type": "GUIDELINE", "source_label": "Omega test guidelines",
+        "evidence_level": "moderate",
+        "notes": "1.7-2.0 = najniższe ryzyko nagłej śmierci sercowej",
+    },
+
+    # ======================================================================
     # Morfologia
     # ======================================================================
     "erytrocyty__abs": {
@@ -773,6 +939,13 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
     ("NRBC%", "*"):                          "nrbc__pct",
     ("Niedojrzałe granulocyty IG %", "*"):   "ig__pct",
     ("Niedojrzałe granulocyty IG il.", "*"): "ig__abs",
+
+    # Kwasy tłuszczowe / Omega (PDF names)
+    ("Indeks Omega-3", "*"):                  "indeks_omega3__direct",
+    ("AA/EPA", "*"):                          "aa_epa__ratio",
+    ("Omega 6/omega 3", "*"):                 "omega6_omega3__ratio",
+    ("Indeks tłuszczów TRANS", "*"):          "indeks_tluszczow_trans__direct",
+    ("NKT/JNKT", "*"):                        "nkt_jnkt__ratio",
 }
 
 
