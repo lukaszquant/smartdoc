@@ -3,6 +3,8 @@ wynki_diag/
 wyniki_pdf/
 raport_zdrowotny.html
 raport_konsultacja_*.html
+raport_zdrowotny.pdf
+raport_konsultacja_*.pdf
 
 # Python
 __pycache__/

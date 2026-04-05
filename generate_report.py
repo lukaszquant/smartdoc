@@ -2626,6 +2626,162 @@ def print_phase1_summary(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PDF export
+# ---------------------------------------------------------------------------
+
+_PDF_CHART_PREP_JS = r"""
+async () => {
+  const graphDivs = Array.from(document.querySelectorAll('.plotly-graph-div'));
+  document.querySelectorAll('.chart-container').forEach(c => c.classList.add('open'));
+
+  const settle = () => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+
+  await settle();
+
+  for (const gd of graphDivs) {
+    if (gd._fullLayout) {
+      Plotly.Plots.resize(gd);
+    }
+  }
+
+  await settle();
+
+  for (const gd of graphDivs) {
+    const n = (gd.data || []).length;
+    if (n > 0) {
+      const idx = Array.from({ length: n }, (_, i) => i);
+      await Plotly.restyle(gd, {
+        'line.color': '#000000',
+        'line.dash': 'solid',
+        'marker.color': '#000000',
+        'marker.line.color': '#000000',
+      }, idx);
+    }
+
+    const keptShapes = ((gd.layout && gd.layout.shapes) || [])
+      .filter(s => s.type === 'line' && s.line && s.line.dash === 'dash')
+      .map(s => ({
+        ...s,
+        line: { ...(s.line || {}), color: '#000000', width: 1 },
+        opacity: 1,
+      }));
+
+    await Plotly.relayout(gd, {
+      shapes: keptShapes,
+      annotations: [],
+      'xaxis.gridcolor': '#e5e7eb',
+      'yaxis.gridcolor': '#e5e7eb',
+    });
+  }
+
+  await settle();
+
+  for (const gd of graphDivs) {
+    const rect = gd.getBoundingClientRect();
+    const width = Math.max(300, Math.round(rect.width || 700));
+    const height = Math.max(150, Math.round(rect.height || 220));
+    const url = await Plotly.toImage(gd, {
+      format: 'png',
+      width,
+      height,
+      scale: 2,
+    });
+
+    const img = document.createElement('img');
+    img.src = url;
+    img.style.width = '100%';
+    img.style.maxWidth = width + 'px';
+    img.style.height = 'auto';
+    img.style.display = 'block';
+    gd.replaceWith(img);
+  }
+}
+"""
+
+_PLOTLY_READY_JS = r"""
+() => {
+  const els = document.querySelectorAll('.plotly-graph-div');
+  return els.length === 0 || Array.from(els).every(e => e._fullLayout);
+}
+"""
+
+
+def html_to_pdf(context, html_path: Path, pdf_path: Path) -> None:
+    """Render a single HTML file to PDF using an existing Playwright browser context."""
+    page = context.new_page()
+    try:
+        file_url = f"file://{html_path.resolve()}"
+        page.goto(file_url, wait_until="networkidle")
+        page.emulate_media(media="print")
+
+        plotly_available = page.evaluate("() => typeof window.Plotly !== 'undefined'")
+        if plotly_available:
+            page.wait_for_function(_PLOTLY_READY_JS, timeout=30000)
+            page.evaluate(_PDF_CHART_PREP_JS)
+        else:
+            LOG.warning(
+                "Plotly not loaded for %s (CDN unreachable?). "
+                "PDF written without chart freezing.",
+                html_path.name,
+            )
+
+        page.pdf(
+            path=str(pdf_path),
+            format="A4",
+            print_background=True,
+            margin={"top": "15mm", "right": "12mm", "bottom": "15mm", "left": "12mm"},
+        )
+    finally:
+        page.close()
+
+
+def generate_pdfs(html_paths: list[Path]) -> tuple[list[Path], int]:
+    """Render a batch of HTML files to PDFs, one per file. Returns (written, failed_count)."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        LOG.warning(
+            "PDF export skipped: playwright not installed. "
+            "Run: pip install playwright && playwright install chromium"
+        )
+        return [], 0
+
+    written: list[Path] = []
+    failed = 0
+
+    with sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch()
+        except Exception as exc:
+            LOG.warning(
+                "PDF export skipped: Chromium unavailable. "
+                "Run: playwright install chromium (%s)",
+                exc,
+            )
+            return [], 0
+
+        try:
+            context = browser.new_context()
+            try:
+                for html_path in html_paths:
+                    pdf_path = html_path.with_suffix(".pdf")
+                    try:
+                        html_to_pdf(context, html_path, pdf_path)
+                        written.append(pdf_path)
+                    except Exception as exc:
+                        failed += 1
+                        LOG.warning("PDF render failed for %s: %s", html_path.name, exc)
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+    return written, failed
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2679,6 +2835,19 @@ def main():
         )
     else:
         LOG.info("No specialist consultation reports needed.")
+
+    # PDF export
+    LOG.info("Exporting PDFs...")
+    html_paths = [output_path, *specialist_paths]
+    written, failed = generate_pdfs(html_paths)
+    if written:
+        LOG.info(
+            "PDFs written: %d (%s)",
+            len(written),
+            ", ".join(p.name for p in written),
+        )
+    if failed:
+        LOG.warning("PDF export: %d file(s) failed — see warnings above.", failed)
 
     return df, status_df, trend_df, rec_df
 

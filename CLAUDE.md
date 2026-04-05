@@ -36,6 +36,8 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 - pandas, numpy, plotly 6.6, jinja2 3.1
 - pdfplumber, PyMuPDF (fitz) — PDF parsing
 - tesseract-ocr (system) — OCR for CID-encoded/image-only PDFs
+- playwright (headless Chromium) — PDF export of generated HTML reports
+  - Install: `.venv/bin/pip install playwright && .venv/bin/playwright install chromium`
 - Report language: Polish
 
 ## Running the generator
