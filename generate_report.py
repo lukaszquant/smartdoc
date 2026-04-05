@@ -560,18 +560,23 @@ def assess_status(
     Returns
     -------
     dict with keys:
-        status   — "OK", "POWYŻEJ NORMY", "PONIŻEJ NORMY",
-                    "POWYŻEJ OPT", "PONIŻEJ OPT", "GRANICA OPT",
-                    "BRAK DANYCH", "WARTOŚĆ PROGOWA"
-        severity — "none", "low", "moderate", "high", "unknown"
-        basis    — "lab", "optimal", "data_quality", "threshold"
-        detail   — optional clarification string
+        status          — "OK", "POWYŻEJ NORMY", "PONIŻEJ NORMY",
+                           "POWYŻEJ OPT", "PONIŻEJ OPT", "GRANICA OPT",
+                           "BRAK DANYCH", "WARTOŚĆ PROGOWA"
+        severity        — "none", "low", "moderate", "high", "unknown"
+        basis           — "lab", "optimal", "data_quality", "threshold"
+        detail          — optional clarification string
+        deviation_pct   — magnitude percent outside crossed lab boundary
+                           (for POWYŻEJ/PONIŻEJ NORMY), else None
+        deviation_tier  — "mild" (<10%) or "severe" (>=10%) for lab-range
+                           statuses, else None
     """
     # No numeric value at all
     if numeric_value is None or (isinstance(numeric_value, float)
                                  and np.isnan(numeric_value)):
         return {"status": "BRAK DANYCH", "severity": "unknown",
-                "basis": "data_quality", "detail": ""}
+                "basis": "data_quality", "detail": "",
+                "deviation_pct": None, "deviation_tier": None}
 
     # --- Threshold values (<, >) — best-effort assessment ---
     if comparator in ("<", "≤"):
@@ -580,34 +585,45 @@ def assess_status(
         effective_high = optimal_high if optimal_high is not None else lab_high
         if effective_high is not None and numeric_value <= effective_high:
             return {"status": "OK", "severity": "none",
-                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}"}
+                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "WARTOŚĆ PROGOWA", "severity": "unknown",
                 "basis": "threshold",
-                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić"}
+                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić",
+                "deviation_pct": None, "deviation_tier": None}
 
     if comparator in (">", "≥"):
         effective_low = optimal_low if optimal_low is not None else lab_low
         if effective_low is not None and numeric_value >= effective_low:
             return {"status": "OK", "severity": "none",
-                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}"}
+                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "WARTOŚĆ PROGOWA", "severity": "unknown",
                 "basis": "threshold",
-                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić"}
+                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić",
+                "deviation_pct": None, "deviation_tier": None}
 
     # --- Lab range check (takes priority — outside lab = most severe) ---
     if lab_low is not None and numeric_value < lab_low:
-        return {"status": "PONIŻEJ NORMY", "severity": "high",
-                "basis": "lab", "detail": ""}
+        dev_pct, tier = _lab_deviation(numeric_value, lab_low)
+        sev = "high" if tier == "severe" else "moderate"
+        return {"status": "PONIŻEJ NORMY", "severity": sev,
+                "basis": "lab", "detail": "",
+                "deviation_pct": dev_pct, "deviation_tier": tier}
     if lab_high is not None and numeric_value > lab_high:
-        return {"status": "POWYŻEJ NORMY", "severity": "high",
-                "basis": "lab", "detail": ""}
+        dev_pct, tier = _lab_deviation(numeric_value, lab_high)
+        sev = "high" if tier == "severe" else "moderate"
+        return {"status": "POWYŻEJ NORMY", "severity": sev,
+                "basis": "lab", "detail": "",
+                "deviation_pct": dev_pct, "deviation_tier": tier}
 
     # --- Optimal range check ---
     has_optimal = optimal_low is not None or optimal_high is not None
     if not has_optimal:
         # No optimal range defined — within lab range is the best we can say
         return {"status": "OK", "severity": "none",
-                "basis": "lab", "detail": "brak zakresu optymalnego"}
+                "basis": "lab", "detail": "brak zakresu optymalnego",
+                "deviation_pct": None, "deviation_tier": None}
 
     below_opt = optimal_low is not None and numeric_value < optimal_low
     above_opt = optimal_high is not None and numeric_value > optimal_high
@@ -615,20 +631,46 @@ def assess_status(
     if below_opt:
         if _is_near_boundary(numeric_value, optimal_low):
             return {"status": "GRANICA OPT", "severity": "low",
-                    "basis": "optimal", "detail": "blisko dolnej granicy"}
+                    "basis": "optimal", "detail": "blisko dolnej granicy",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "PONIŻEJ OPT", "severity": "moderate",
-                "basis": "optimal", "detail": ""}
+                "basis": "optimal", "detail": "",
+                "deviation_pct": None, "deviation_tier": None}
 
     if above_opt:
         if _is_near_boundary(numeric_value, optimal_high):
             return {"status": "GRANICA OPT", "severity": "low",
-                    "basis": "optimal", "detail": "blisko górnej granicy"}
+                    "basis": "optimal", "detail": "blisko górnej granicy",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "POWYŻEJ OPT", "severity": "moderate",
-                "basis": "optimal", "detail": ""}
+                "basis": "optimal", "detail": "",
+                "deviation_pct": None, "deviation_tier": None}
 
     # Within optimal range → OK (no inside-range GRANICA)
     return {"status": "OK", "severity": "none",
-            "basis": "optimal", "detail": ""}
+            "basis": "optimal", "detail": "",
+            "deviation_pct": None, "deviation_tier": None}
+
+
+# Cutoff between mild and severe lab-range deviation, in percent.
+_LAB_DEVIATION_SEVERE_PCT = 10.0
+
+
+def _lab_deviation(
+    value: float, boundary: float,
+) -> tuple[float, str]:
+    """Compute magnitude % distance from the crossed lab boundary.
+
+    Returns (deviation_pct, tier) where tier is "mild" (<10%) or
+    "severe" (>=10%).  When the boundary is zero, falls back to
+    absolute distance and marks any non-zero deviation as "severe".
+    """
+    if boundary == 0:
+        dev = abs(value - boundary)
+        return dev, ("severe" if dev > 0 else "mild")
+    dev_pct = abs(value - boundary) / abs(boundary) * 100.0
+    tier = "severe" if dev_pct >= _LAB_DEVIATION_SEVERE_PCT else "mild"
+    return dev_pct, tier
 
 
 def _is_near_boundary(value: float, boundary: float) -> bool:
@@ -690,6 +732,8 @@ def assess_all_statuses(df: pd.DataFrame) -> pd.DataFrame:
             "severity": result["severity"],
             "basis": result["basis"],
             "detail": result["detail"],
+            "deviation_pct": result.get("deviation_pct"),
+            "deviation_tier": result.get("deviation_tier"),
             "source_type": meta.get("source_type", ""),
             "source_label": meta.get("source_label", ""),
             "evidence_level": meta.get("evidence_level", ""),
@@ -761,6 +805,18 @@ def print_phase3_summary(status_df: pd.DataFrame) -> None:
         if n > 0:
             print(f"  {status:20s}: {n}")
     print(f"  {'TOTAL':20s}: {len(status_df)}")
+
+    # Lab-range deviation tier breakdown
+    lab_out = status_df[
+        status_df["status"].isin(["POWYŻEJ NORMY", "PONIŻEJ NORMY"])
+    ]
+    if len(lab_out):
+        tier_counts = lab_out["deviation_tier"].value_counts().to_dict()
+        mild = int(tier_counts.get("mild", 0))
+        severe = int(tier_counts.get("severe", 0))
+        print(f"\n--- Out-of-lab deviation tiers ---")
+        print(f"  {'out_of_lab_mild':20s}: {mild}")
+        print(f"  {'out_of_lab_severe':20s}: {severe}")
 
     # Highlight items requiring attention
     attention = status_df[status_df["severity"].isin(["high", "moderate"])]
@@ -1050,6 +1106,8 @@ def _rec(
     confidence: str = "moderate",
     specialist_pl: str = "",
     additional_tests_pl: list[str] | None = None,
+    specialist_bucket_id: str = "",
+    source_group: str = "",
 ) -> dict:
     """Build a recommendation dict."""
     return {
@@ -1063,6 +1121,8 @@ def _rec(
         "medical_escalation": medical_escalation,
         "specialist_pl": specialist_pl,
         "additional_tests_pl": additional_tests_pl or [],
+        "specialist_bucket_id": specialist_bucket_id,
+        "source_group": source_group,
     }
 
 
@@ -1101,29 +1161,82 @@ def _resolve_specialist_recs(
     """Return list of (specialist_pl, marker_subset, filtered_test_labels).
 
     One entry per distinct specialist. Splits markers in mixed-specialist groups.
+    Delegates to _resolve_marker_specialist() for routing each marker.
     """
-    # Partition markers: those with marker-level override vs group fallback
-    specialist_buckets: dict[str, tuple[list[str], list[dict]]] = {}
+    specialist_buckets: dict[str, tuple[list[str], list[str]]] = {}
 
     for mid in markers:
-        override = MARKER_SPECIALIST.get(mid)
-        if override:
-            spec = override["specialist_pl"]
-            tests = override.get("additional_tests", [])
-        else:
-            grp_info = GROUP_SPECIALIST.get(group, {})
-            spec = grp_info.get("specialist_pl", "")
-            tests = grp_info.get("additional_tests", [])
-
+        resolved = _resolve_marker_specialist(
+            group, mid, tested_marker_ids, tested_labels_norm,
+        )
+        spec = resolved["specialist_pl"]
         if spec not in specialist_buckets:
-            specialist_buckets[spec] = ([], tests)
+            specialist_buckets[spec] = ([], resolved["additional_tests_pl"])
         specialist_buckets[spec][0].append(mid)
 
-    result = []
-    for spec, (spec_markers, tests) in specialist_buckets.items():
-        filtered = _filter_tests(tests, tested_marker_ids, tested_labels_norm)
-        result.append((spec, spec_markers, filtered))
-    return result
+    return [
+        (spec, spec_markers, filtered_tests)
+        for spec, (spec_markers, filtered_tests) in specialist_buckets.items()
+    ]
+
+
+def _slugify_specialist_label(label: str) -> str:
+    """Convert a Polish specialist display label to a filesystem-safe ASCII slug.
+
+    Example: "diabetolog / endokrynolog" → "diabetolog_endokrynolog"
+    """
+    if not label:
+        return ""
+    import unicodedata
+    # Transliterate Polish chars, strip accents
+    nfkd = unicodedata.normalize("NFKD", label)
+    ascii_str = nfkd.encode("ascii", "ignore").decode("ascii")
+    # Replace separators and whitespace with underscores
+    ascii_str = re.sub(r"[/\s]+", "_", ascii_str)
+    # Remove anything that isn't alphanumeric or underscore
+    ascii_str = re.sub(r"[^a-zA-Z0-9_]", "", ascii_str)
+    # Collapse multiple underscores, strip leading/trailing
+    ascii_str = re.sub(r"_+", "_", ascii_str).strip("_")
+    return ascii_str.lower()
+
+
+def _specialist_bucket_id(label: str) -> str:
+    """Return a stable canonical ID for a specialist routing bucket.
+
+    Uses _slugify_specialist_label under the hood. Empty label → empty string.
+    """
+    return _slugify_specialist_label(label)
+
+
+def _resolve_marker_specialist(
+    group: str,
+    marker_id: str,
+    tested_marker_ids: set[str],
+    tested_labels_norm: set[str],
+) -> dict:
+    """Resolve the specialist routing for a single marker.
+
+    Returns a dict with specialist_bucket_id, specialist_pl, marker_id, group,
+    and additional_tests_pl (filtered against already-tested markers).
+    """
+    override = MARKER_SPECIALIST.get(marker_id)
+    if override:
+        spec = override["specialist_pl"]
+        tests_raw = override.get("additional_tests", [])
+    else:
+        grp_info = GROUP_SPECIALIST.get(group, {})
+        spec = grp_info.get("specialist_pl", "")
+        tests_raw = grp_info.get("additional_tests", [])
+
+    filtered_tests = _filter_tests(tests_raw, tested_marker_ids, tested_labels_norm)
+
+    return {
+        "specialist_bucket_id": _specialist_bucket_id(spec),
+        "specialist_pl": spec,
+        "marker_id": marker_id,
+        "group": group,
+        "additional_tests_pl": filtered_tests,
+    }
 
 
 def generate_recommendations(
@@ -1310,6 +1423,8 @@ def generate_recommendations(
                     confidence="high",
                     specialist_pl=specialist_pl,
                     additional_tests_pl=extra_tests,
+                    specialist_bucket_id=_specialist_bucket_id(specialist_pl),
+                    source_group=group,
                 ))
 
     # --- CBC declining pattern — extra emphasis ---
@@ -1340,6 +1455,8 @@ def generate_recommendations(
             confidence="high",
             specialist_pl="hematolog",
             additional_tests_pl=cbc_extra_tests,
+            specialist_bucket_id=_specialist_bucket_id("hematolog"),
+            source_group="morfologia",
         ))
 
     # ===================================================================
@@ -1773,7 +1890,8 @@ def generate_recommendations(
         columns=["category", "priority", "marker_ids", "text_pl",
                  "rationale_pl", "evidence", "confidence",
                  "medical_escalation", "specialist_pl",
-                 "additional_tests_pl"]
+                 "additional_tests_pl", "specialist_bucket_id",
+                 "source_group"]
     )
 
 
@@ -1824,6 +1942,263 @@ def print_phase5_summary(rec_df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Specialist report generation
+# ---------------------------------------------------------------------------
+
+def build_specialist_report_specs(
+    rec_df: pd.DataFrame,
+    status_df: pd.DataFrame,
+) -> list[dict]:
+    """Build specialist report specifications from triggered medical recommendations.
+
+    Walks all tested markers and routes each through the specialist resolution
+    helper. Includes a marker in a report only if its resolved bucket matches
+    a triggered consultation bucket.
+
+    Returns a list of spec dicts sorted by specialist_bucket_id.
+    """
+    if rec_df.empty:
+        return []
+
+    # Step 1: Find triggered specialist buckets from medical recommendations
+    medical = rec_df[
+        (rec_df["category"] == _CAT_MEDICAL)
+        & (rec_df["specialist_bucket_id"].astype(str).str.len() > 0)
+    ]
+    if medical.empty:
+        return []
+
+    # Collect trigger info per bucket
+    bucket_triggers: dict[str, dict] = {}
+    for _, row in medical.iterrows():
+        bid = row["specialist_bucket_id"]
+        if bid not in bucket_triggers:
+            bucket_triggers[bid] = {
+                "specialist_bucket_id": bid,
+                "specialist_pl": row["specialist_pl"],
+                "trigger_marker_ids": [],
+                "additional_tests_pl": [],
+                "source_groups": [],
+            }
+        bucket_triggers[bid]["trigger_marker_ids"].extend(row["marker_ids"])
+        bucket_triggers[bid]["additional_tests_pl"].extend(row["additional_tests_pl"])
+        if row["source_group"] and row["source_group"] not in bucket_triggers[bid]["source_groups"]:
+            bucket_triggers[bid]["source_groups"].append(row["source_group"])
+
+    triggered_bucket_ids = set(bucket_triggers.keys())
+
+    # Step 2: Build sets for additional-test filtering
+    tested_marker_ids = set(status_df["marker_id"])
+    tested_labels_norm = {
+        _norm_label(MARKERS[mid].get("label_pl", ""))
+        for mid in tested_marker_ids
+        if mid in MARKERS and MARKERS[mid].get("label_pl")
+    }
+
+    # Step 3: Route every tested marker and assign to buckets
+    bucket_markers: dict[str, list[str]] = {bid: [] for bid in triggered_bucket_ids}
+    bucket_groups: dict[str, list[str]] = {bid: [] for bid in triggered_bucket_ids}
+
+    for _, srow in status_df.iterrows():
+        mid = srow["marker_id"]
+        group = srow["group"]
+        resolved = _resolve_marker_specialist(
+            group, mid, tested_marker_ids, tested_labels_norm,
+        )
+        bid = resolved["specialist_bucket_id"]
+        if bid in triggered_bucket_ids:
+            if mid not in bucket_markers[bid]:
+                bucket_markers[bid].append(mid)
+            if group not in bucket_groups[bid]:
+                bucket_groups[bid].append(group)
+
+    # Step 4: Assemble specs
+    group_order = {g: i for i, g in enumerate(GROUPS.keys())}
+    specs = []
+    for bid in sorted(triggered_bucket_ids):
+        report_marker_ids = bucket_markers[bid]
+        if not report_marker_ids:
+            continue
+
+        trigger_info = bucket_triggers[bid]
+        # Deduplicate trigger_marker_ids preserving order
+        seen = set()
+        dedup_triggers = []
+        for m in trigger_info["trigger_marker_ids"]:
+            if m not in seen:
+                seen.add(m)
+                dedup_triggers.append(m)
+
+        # Deduplicate additional_tests_pl preserving first-seen order
+        seen_tests: set[str] = set()
+        dedup_tests: list[str] = []
+        for t in trigger_info["additional_tests_pl"]:
+            if t not in seen_tests:
+                seen_tests.add(t)
+                dedup_tests.append(t)
+
+        # Merge source_groups from triggers + routed markers, sorted by GROUPS order
+        all_groups = list(trigger_info["source_groups"])
+        for g in bucket_groups[bid]:
+            if g not in all_groups:
+                all_groups.append(g)
+        all_groups.sort(key=lambda g: group_order.get(g, 999))
+
+        specs.append({
+            "specialist_bucket_id": bid,
+            "specialist_pl": trigger_info["specialist_pl"],
+            "trigger_marker_ids": dedup_triggers,
+            "report_marker_ids": report_marker_ids,
+            "source_groups": all_groups,
+            "additional_tests_pl": dedup_tests,
+        })
+
+    return specs
+
+
+def build_specialist_context(
+    spec: dict,
+    df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    trend_df: pd.DataFrame,
+) -> dict:
+    """Build template context for a single specialist report.
+
+    Reuses the same status/trend/chart logic as the main report.
+    """
+    marker_set = set(spec["report_marker_ids"])
+    trigger_set = set(spec["trigger_marker_ids"])
+
+    # Filter status_df to report markers only
+    spec_status = status_df[status_df["marker_id"].isin(marker_set)].copy()
+
+    # Build marker sections grouped by source group
+    group_order = list(GROUPS.keys())
+    sections = []
+
+    for group_key in group_order:
+        if group_key not in spec["source_groups"]:
+            continue
+        grp_status = spec_status[spec_status["group"] == group_key]
+        if grp_status.empty:
+            continue
+
+        markers_data = []
+        for _, srow in grp_status.iterrows():
+            mid = srow["marker_id"]
+            trend_rows = trend_df[trend_df["marker_id"] == mid]
+            trend_row = trend_rows.iloc[0] if len(trend_rows) else None
+
+            chart_html = generate_plotly_chart(df, mid, srow)
+
+            val = srow["numeric_value"]
+            comp = srow["comparator"]
+            val_str = (
+                f"{comp}{val}" if comp
+                else (f"{val}" if val is not None and pd.notna(val) else "—")
+            )
+
+            status_icon = _STATUS_ICONS.get(srow["status"], "")
+            dev_tier = srow.get("deviation_tier")
+            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier)
+            markers_data.append({
+                "marker_id": mid,
+                "label": srow["marker_label_pl"],
+                "value_str": val_str,
+                "unit": srow["unit"],
+                "lab_range": _format_range(srow["lab_low"], srow["lab_high"]),
+                "opt_range": _format_range(
+                    srow.get("optimal_low"), srow.get("optimal_high"),
+                ),
+                "status": srow["status"],
+                "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
+                "status_icon": status_icon,
+                "deviation_pct": srow.get("deviation_pct"),
+                "deviation_tier": dev_tier,
+                "badge_class": badge_meta["badge_class"],
+                "badge_label": badge_meta["badge_label"],
+                "severity": srow["severity"],
+                "is_trigger": mid in trigger_set,
+                "n_measurements": (
+                    int(trend_row.get("total_observations",
+                                      trend_row["n_measurements"]))
+                    if trend_row is not None else 1
+                ),
+                "direction": (
+                    trend_row["direction"] if trend_row is not None else ""
+                ),
+                "direction_arrow": (
+                    "" if trend_row is not None and trend_row["direction"] == "stabilny"
+                    else _DIRECTION_ARROWS.get(trend_row["direction"], "")
+                    if trend_row is not None else ""
+                ),
+                "direction_color": (
+                    _DIRECTION_COLORS.get(trend_row["direction"], "#64748b")
+                    if trend_row is not None else "#64748b"
+                ),
+                "math_arrow": (
+                    "↑" if trend_row is not None and trend_row["delta_pct"] > 0
+                    else "↓" if trend_row is not None and trend_row["delta_pct"] < 0
+                    else "→" if trend_row is not None
+                    else ""
+                ),
+                "delta_pct": (
+                    f"{trend_row['delta_pct']:+.1f}%"
+                    if trend_row is not None else ""
+                ),
+                "confidence": (
+                    trend_row["confidence"] if trend_row is not None else "none"
+                ),
+                "chart_html": chart_html,
+                "collected_date": str(srow["collected_date"]),
+            })
+
+        sections.append({
+            "group_key": group_key,
+            "group_label": GROUPS[group_key],
+            "markers": markers_data,
+        })
+
+    # Build trigger marker labels for the rationale section
+    trigger_markers = []
+    for mid in spec["trigger_marker_ids"]:
+        meta = MARKERS.get(mid, {})
+        label = meta.get("label_pl", mid)
+        rows = status_df[status_df["marker_id"] == mid]
+        if len(rows):
+            srow = rows.iloc[0]
+            status = srow["status"]
+            dev_tier = srow.get("deviation_tier")
+        else:
+            status = ""
+            dev_tier = None
+        status_icon = _STATUS_ICONS.get(status, "")
+        badge_meta = _status_badge_meta(status, status_icon, dev_tier)
+        trigger_markers.append({
+            "label": label,
+            "status": status,
+            "status_icon": status_icon,
+            "deviation_tier": dev_tier,
+            "badge_class": badge_meta["badge_class"],
+            "badge_label": badge_meta["badge_label"],
+        })
+
+    return {
+        "report_date": date.today().isoformat(),
+        "specialist_bucket_id": spec["specialist_bucket_id"],
+        "specialist_pl": spec["specialist_pl"],
+        "trigger_markers": trigger_markers,
+        "source_groups": [
+            {"key": g, "label": GROUPS.get(g, g)}
+            for g in spec["source_groups"]
+        ],
+        "marker_sections": sections,
+        "additional_tests": spec["additional_tests_pl"],
+        "total_markers": sum(len(s["markers"]) for s in sections),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Phase 6: HTML report with Plotly charts
 # ---------------------------------------------------------------------------
 
@@ -1849,6 +2224,43 @@ _STATUS_ICONS: dict[str, str] = {
     "BRAK DANYCH": "?",
     "WARTOŚĆ PROGOWA": "~",
 }
+
+def _status_badge_meta(
+    status: str,
+    status_icon: str,
+    deviation_tier: str | None,
+) -> dict:
+    """Compute badge CSS class + display label for a marker status.
+
+    Centralizes the fallback logic shared by the main report marker
+    badge, the specialist trigger badge, and the specialist marker
+    badge.  Missing/unknown deviation_tier for a NORMY status falls
+    back to the plain badge-normy class (never severe) so that gaps
+    in data are not visually escalated.
+    """
+    icon = (status_icon or "").strip()
+    prefix = f"{icon} " if icon else ""
+
+    if status == "OK":
+        return {"badge_class": "badge-ok", "badge_label": f"{prefix}{status}"}
+    if status == "GRANICA OPT":
+        return {"badge_class": "badge-granica", "badge_label": f"{prefix}{status}"}
+    if status in ("POWYŻEJ OPT", "PONIŻEJ OPT"):
+        return {"badge_class": "badge-opt", "badge_label": f"{prefix}{status}"}
+    if status in ("POWYŻEJ NORMY", "PONIŻEJ NORMY"):
+        if deviation_tier == "mild":
+            return {
+                "badge_class": "badge-normy-mild",
+                "badge_label": f"{prefix}{status} (<10%)",
+            }
+        if deviation_tier == "severe":
+            return {
+                "badge_class": "badge-normy-severe",
+                "badge_label": f"{prefix}{status} (\u226510%)",
+            }
+        return {"badge_class": "badge-normy", "badge_label": f"{prefix}{status}"}
+    return {"badge_class": "badge-unknown", "badge_label": f"{prefix}{status}"}
+
 
 _DIRECTION_ARROWS: dict[str, str] = {
     "poprawa": "✓",
@@ -2042,6 +2454,9 @@ def _build_group_sections(
             comp = srow["comparator"]
             val_str = f"{comp}{val}" if comp else (f"{val}" if val is not None and pd.notna(val) else "—")
 
+            status_icon = _STATUS_ICONS.get(srow["status"], "")
+            dev_tier = srow.get("deviation_tier")
+            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier)
             markers_data.append({
                 "marker_id": mid,
                 "label": srow["marker_label_pl"],
@@ -2051,7 +2466,11 @@ def _build_group_sections(
                 "opt_range": _format_range(srow.get("optimal_low"), srow.get("optimal_high")),
                 "status": srow["status"],
                 "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
-                "status_icon": _STATUS_ICONS.get(srow["status"], ""),
+                "status_icon": status_icon,
+                "deviation_pct": srow.get("deviation_pct"),
+                "deviation_tier": dev_tier,
+                "badge_class": badge_meta["badge_class"],
+                "badge_label": badge_meta["badge_label"],
                 "severity": srow["severity"],
                 "n_measurements": int(trend_row.get("total_observations", trend_row["n_measurements"])) if trend_row is not None else 1,
                 "direction": trend_row["direction"] if trend_row is not None else "",
@@ -2262,6 +2681,53 @@ def render_html(
     return template.render(**context)
 
 
+def render_specialist_html(
+    spec: dict,
+    df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    trend_df: pd.DataFrame,
+) -> str:
+    """Render a single specialist consultation report as HTML."""
+    context = build_specialist_context(spec, df, status_df, trend_df)
+
+    template_dir = Path(__file__).parent
+    env = Environment(
+        loader=FileSystemLoader(template_dir),
+        autoescape=True,
+    )
+    template = env.get_template("report_specialist_template.html")
+    return template.render(**context)
+
+
+def generate_specialist_reports(
+    rec_df: pd.DataFrame,
+    df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    trend_df: pd.DataFrame,
+) -> list[Path]:
+    """Generate specialist consultation reports for all triggered buckets.
+
+    Returns list of written file paths.
+    """
+    specs = build_specialist_report_specs(rec_df, status_df)
+    if not specs:
+        return []
+
+    output_dir = OUTPUT_PATH.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_date = date.today().isoformat()
+
+    written: list[Path] = []
+    for spec in specs:
+        html = render_specialist_html(spec, df, status_df, trend_df)
+        filename = f"raport_konsultacja_{spec['specialist_bucket_id']}_{report_date}.html"
+        path = output_dir / filename
+        path.write_text(html, encoding="utf-8")
+        written.append(path)
+
+    return written
+
+
 # ---------------------------------------------------------------------------
 # Diagnostics / Phase 1 entry point
 # ---------------------------------------------------------------------------
@@ -2330,6 +2796,162 @@ def print_phase1_summary(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PDF export
+# ---------------------------------------------------------------------------
+
+_PDF_CHART_PREP_JS = r"""
+async () => {
+  const graphDivs = Array.from(document.querySelectorAll('.plotly-graph-div'));
+  document.querySelectorAll('.chart-container').forEach(c => c.classList.add('open'));
+
+  const settle = () => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+
+  await settle();
+
+  for (const gd of graphDivs) {
+    if (gd._fullLayout) {
+      Plotly.Plots.resize(gd);
+    }
+  }
+
+  await settle();
+
+  for (const gd of graphDivs) {
+    const n = (gd.data || []).length;
+    if (n > 0) {
+      const idx = Array.from({ length: n }, (_, i) => i);
+      await Plotly.restyle(gd, {
+        'line.color': '#000000',
+        'line.dash': 'solid',
+        'marker.color': '#000000',
+        'marker.line.color': '#000000',
+      }, idx);
+    }
+
+    const keptShapes = ((gd.layout && gd.layout.shapes) || [])
+      .filter(s => s.type === 'line' && s.line && s.line.dash === 'dash')
+      .map(s => ({
+        ...s,
+        line: { ...(s.line || {}), color: '#000000', width: 1 },
+        opacity: 1,
+      }));
+
+    await Plotly.relayout(gd, {
+      shapes: keptShapes,
+      annotations: [],
+      'xaxis.gridcolor': '#e5e7eb',
+      'yaxis.gridcolor': '#e5e7eb',
+    });
+  }
+
+  await settle();
+
+  for (const gd of graphDivs) {
+    const rect = gd.getBoundingClientRect();
+    const width = Math.max(300, Math.round(rect.width || 700));
+    const height = Math.max(150, Math.round(rect.height || 220));
+    const url = await Plotly.toImage(gd, {
+      format: 'png',
+      width,
+      height,
+      scale: 2,
+    });
+
+    const img = document.createElement('img');
+    img.src = url;
+    img.style.width = '100%';
+    img.style.maxWidth = width + 'px';
+    img.style.height = 'auto';
+    img.style.display = 'block';
+    gd.replaceWith(img);
+  }
+}
+"""
+
+_PLOTLY_READY_JS = r"""
+() => {
+  const els = document.querySelectorAll('.plotly-graph-div');
+  return els.length === 0 || Array.from(els).every(e => e._fullLayout);
+}
+"""
+
+
+def html_to_pdf(context, html_path: Path, pdf_path: Path) -> None:
+    """Render a single HTML file to PDF using an existing Playwright browser context."""
+    page = context.new_page()
+    try:
+        file_url = f"file://{html_path.resolve()}"
+        page.goto(file_url, wait_until="networkidle")
+        page.emulate_media(media="print")
+
+        plotly_available = page.evaluate("() => typeof window.Plotly !== 'undefined'")
+        if plotly_available:
+            page.wait_for_function(_PLOTLY_READY_JS, timeout=30000)
+            page.evaluate(_PDF_CHART_PREP_JS)
+        else:
+            LOG.warning(
+                "Plotly not loaded for %s (CDN unreachable?). "
+                "PDF written without chart freezing.",
+                html_path.name,
+            )
+
+        page.pdf(
+            path=str(pdf_path),
+            format="A4",
+            print_background=True,
+            margin={"top": "15mm", "right": "12mm", "bottom": "15mm", "left": "12mm"},
+        )
+    finally:
+        page.close()
+
+
+def generate_pdfs(html_paths: list[Path]) -> tuple[list[Path], int]:
+    """Render a batch of HTML files to PDFs, one per file. Returns (written, failed_count)."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        LOG.warning(
+            "PDF export skipped: playwright not installed. "
+            "Run: pip install playwright && playwright install chromium"
+        )
+        return [], 0
+
+    written: list[Path] = []
+    failed = 0
+
+    with sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch()
+        except Exception as exc:
+            LOG.warning(
+                "PDF export skipped: Chromium unavailable. "
+                "Run: playwright install chromium (%s)",
+                exc,
+            )
+            return [], 0
+
+        try:
+            context = browser.new_context()
+            try:
+                for html_path in html_paths:
+                    pdf_path = html_path.with_suffix(".pdf")
+                    try:
+                        html_to_pdf(context, html_path, pdf_path)
+                        written.append(pdf_path)
+                    except Exception as exc:
+                        failed += 1
+                        LOG.warning("PDF render failed for %s: %s", html_path.name, exc)
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+    return written, failed
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2371,6 +2993,31 @@ def main():
     output_path = OUTPUT_PATH
     output_path.write_text(html, encoding="utf-8")
     LOG.info("Report saved to %s (%d KB)", output_path.name, len(html) // 1024)
+
+    # Specialist consultation reports
+    LOG.info("Generating specialist consultation reports...")
+    specialist_paths = generate_specialist_reports(rec_df, df, status_df, trend_df)
+    if specialist_paths:
+        LOG.info(
+            "Specialist reports: %d written (%s)",
+            len(specialist_paths),
+            ", ".join(p.name for p in specialist_paths),
+        )
+    else:
+        LOG.info("No specialist consultation reports needed.")
+
+    # PDF export
+    LOG.info("Exporting PDFs...")
+    html_paths = [output_path, *specialist_paths]
+    written, failed = generate_pdfs(html_paths)
+    if written:
+        LOG.info(
+            "PDFs written: %d (%s)",
+            len(written),
+            ", ".join(p.name for p in written),
+        )
+    if failed:
+        LOG.warning("PDF export: %d file(s) failed — see warnings above.", failed)
 
     return df, status_df, trend_df, rec_df
 

@@ -88,6 +88,8 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
 .badge-granica { background: #fef9c3; color: #854d0e; }
 .badge-opt { background: #ffedd5; color: #9a3412; }
 .badge-normy { background: #fecaca; color: #991b1b; }
+.badge-normy-mild { background: #fed7aa; color: #9a3412; }
+.badge-normy-severe { background: #fecaca; color: #991b1b; }
 .badge-unknown { background: #f1f5f9; color: #475569; }
 
 /* Marker table */
@@ -245,6 +247,7 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
 /* Print */
 @media print {
   .nav { display: none; }
+  .chart-toggle { display: none; }
   .chart-container { display: block !important; }
   body { max-width: 100%; }
 }
@@ -342,9 +345,7 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
           <td class="range">{{ m.lab_range }}</td>
           <td class="range">{{ m.opt_range }}</td>
           <td>
-            <span class="badge {% if m.status == 'OK' %}badge-ok{% elif m.status == 'GRANICA OPT' %}badge-granica{% elif 'NORMY' in m.status %}badge-normy{% elif 'OPT' in m.status %}badge-opt{% else %}badge-unknown{% endif %}">
-              {{ m.status_icon }} {{ m.status }}
-            </span>
+            <span class="badge {{ m.badge_class }}">{{ m.badge_label }}</span>
           </td>
           <td class="trend">
             {% if m.direction %}
@@ -556,7 +557,8 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
         <tr><td><span class="badge badge-ok">✓ OK</span></td><td>W zakresie optymalnym</td><td>Brak</td></tr>
         <tr><td><span class="badge badge-granica">~ GRANICA OPT</span></td><td>Tuż przy granicy optimum</td><td>Niska</td></tr>
         <tr><td><span class="badge badge-opt">↑↓ POZA OPT</span></td><td>Poza zakresem optymalnym, w normie lab</td><td>Umiarkowana</td></tr>
-        <tr><td><span class="badge badge-normy">⬆⬇ POZA NORMY</span></td><td>Poza zakresem referencyjnym laboratorium</td><td>Wysoka</td></tr>
+        <tr><td><span class="badge badge-normy-mild">⬆⬇ POZA NORMY (&lt;10%)</span></td><td>Poza normą laboratoryjną, odchylenie &lt;10%</td><td>Umiarkowana</td></tr>
+        <tr><td><span class="badge badge-normy-severe">⬆⬇ POZA NORMY (≥10%)</span></td><td>Poza normą laboratoryjną, odchylenie ≥10%</td><td>Wysoka</td></tr>
       </tbody>
     </table>
 

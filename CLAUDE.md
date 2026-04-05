@@ -36,6 +36,8 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 - pandas, numpy, plotly 6.6, jinja2 3.1
 - pdfplumber, PyMuPDF (fitz) — PDF parsing
 - tesseract-ocr (system) — OCR for CID-encoded/image-only PDFs
+- playwright (headless Chromium) — PDF export of generated HTML reports
+  - Install: `.venv/bin/pip install playwright && .venv/bin/playwright install chromium`
 - Report language: Polish
 
 ## Running the generator
@@ -87,6 +89,16 @@ When implementing multi-step work (patches, new features, reviews), keep structu
 - Impact summary
 
 This ensures future conversations have full context without re-deriving it.
+
+## Planning new features
+
+When planning a new feature or significant change:
+
+1. **Create a plan file** in `PLAN/<FEATURE_NAME>/PLAN_v1.md` (increment version for revisions).
+2. **Present the plan** to the user for approval before implementing.
+3. Plans stay in `PLAN/` for reference — they are gitignored.
+
+Do NOT put plans inline in the conversation. Always write them to a file.
 
 ## Handling external reviews
 
