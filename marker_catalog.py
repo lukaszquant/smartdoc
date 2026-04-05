@@ -51,6 +51,8 @@ GROUPS = {
     "metale":       "Metale ciężkie",
     "kwasy_tluszczowe": "Kwasy tłuszczowe / Omega",
     "morfologia":   "Morfologia",
+    "koagulacja":   "Koagulacja",
+    "autoimmunologia": "Autoimmunologia",
 }
 
 # ---------------------------------------------------------------------------
@@ -82,6 +84,23 @@ MARKER_SPECIALIST: dict[str, dict] = {
             {"label_pl": "Prokalcytonina", "filter_aliases": ["Prokalcytonina"]},
         ],
     },
+    "anty_ccp__direct": {
+        "specialist_pl": "reumatolog",
+        "additional_tests": [
+            {"label_pl": "RF IgM", "filter_aliases": ["Czynnik reumatoidalny RF IgM", "RF IgM"]},
+            {"label_pl": "ANA", "filter_aliases": ["ANA"]},
+        ],
+    },
+    "rf_igm__direct": {
+        "specialist_pl": "reumatolog",
+        "additional_tests": [
+            {"label_pl": "anty-CCP", "filter_aliases": ["anty-CCP", "Anty-CCP"]},
+        ],
+    },
+    "anty_bp180__direct": {"specialist_pl": "dermatolog", "additional_tests": []},
+    "anty_bp230__direct": {"specialist_pl": "dermatolog", "additional_tests": []},
+    "anty_enwoplakin__direct": {"specialist_pl": "dermatolog", "additional_tests": []},
+    "anty_kolagen_vii__direct": {"specialist_pl": "dermatolog", "additional_tests": []},
 }
 
 # Group-level fallback: used when no marker-level override exists.
@@ -170,6 +189,20 @@ GROUP_SPECIALIST: dict[str, dict] = {
             {"label_pl": "TIBC", "filter_aliases": ["TIBC"]},
             {"label_pl": "Witamina B12", "filter_aliases": ["Witamina B12", "B12"]},
             {"label_pl": "Kwas foliowy", "filter_aliases": ["Kwas foliowy", "Folian"]},
+        ],
+    },
+    "koagulacja": {
+        "specialist_pl": "internista / hematolog",
+        "additional_tests": [
+            {"label_pl": "APTT", "filter_aliases": ["APTT"]},
+            {"label_pl": "Fibrynogen", "filter_aliases": ["Fibrynogen"]},
+        ],
+    },
+    "autoimmunologia": {
+        "specialist_pl": "reumatolog / dermatolog",
+        "additional_tests": [
+            {"label_pl": "ANA (przeciwciała przeciwjądrowe)", "filter_aliases": ["ANA", "Przeciwciała przeciwjądrowe"]},
+            {"label_pl": "OB (odczyn Biernackiego)", "filter_aliases": ["OB", "Odczyn Biernackiego", "OB (odczyn Biernackiego)"]},
         ],
     },
 }
@@ -267,6 +300,14 @@ MARKERS: dict[str, dict] = {
         "source_type": None, "source_label": "",
         "evidence_level": "",
         "notes": "Marker niewydolności serca; norma lab <125 pg/ml dla osób <75 lat",
+    },
+    "lp_a__direct": {
+        "label_pl": "Lp(a)", "group": "lipidy",
+        "unit": "g/L", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 0.30,
+        "source_type": "GUIDELINE", "source_label": "ESC/EAS 2019",
+        "evidence_level": "high",
+        "notes": "Lipoproteina(a); wartości ≥0.30 g/L (~≥30 mg/dL) = podwyższone ryzyko CV",
     },
 
     # ======================================================================
@@ -492,6 +533,14 @@ MARKERS: dict[str, dict] = {
         "evidence_level": "high",
         "notes": ">90 = prawidłowa filtracja; interpretować z kreatyniną i nawodnieniem",
     },
+    "kwas_moczowy__direct": {
+        "label_pl": "Kwas moczowy", "group": "nerki",
+        "unit": "mg/dl", "expression_type": "direct",
+        "optimal_low": 3.5, "optimal_high": 6.0,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Podwyższony = ryzyko dny moczanowej i kamicy nerkowej; norma lab 3.4-7.0",
+    },
 
     # ======================================================================
     # Stan zapalny
@@ -590,7 +639,7 @@ MARKERS: dict[str, dict] = {
     },
     "selen__direct": {
         "label_pl": "Selen", "group": "mineraly",
-        "unit": "µg/l", "expression_type": "direct",
+        "unit": "µg/L", "expression_type": "direct",
         "optimal_low": 100.0, "optimal_high": 140.0,
         "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
         "evidence_level": "moderate",
@@ -632,13 +681,21 @@ MARKERS: dict[str, dict] = {
         "evidence_level": "moderate",
         "notes": "Norma lab 197-771; optymalnie 400-800; niski B12 + wysoka homocysteina = niedobór funkcjonalny",
     },
+    "witamina_b6__direct": {
+        "label_pl": "Witamina B6", "group": "witaminy",
+        "unit": "nmol/L", "expression_type": "direct",
+        "optimal_low": 40.0, "optimal_high": 100.0,
+        "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
+        "evidence_level": "moderate",
+        "notes": "Aktywna forma PLP; wysokie wartości mogą świadczyć o nadmiernej suplementacji",
+    },
 
     # ======================================================================
     # Metale ciężkie
     # ======================================================================
     "arsen__direct": {
         "label_pl": "Arsen we krwi", "group": "metale",
-        "unit": "µg/l", "expression_type": "direct",
+        "unit": "µg/L", "expression_type": "direct",
         "optimal_low": None, "optimal_high": 5.0,
         "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
         "evidence_level": "low",
@@ -646,7 +703,7 @@ MARKERS: dict[str, dict] = {
     },
     "olow__direct": {
         "label_pl": "Ołów we krwi", "group": "metale",
-        "unit": "µg/l", "expression_type": "direct",
+        "unit": "µg/L", "expression_type": "direct",
         "optimal_low": None, "optimal_high": 20.0,
         "source_type": "GUIDELINE", "source_label": "CDC",
         "evidence_level": "high",
@@ -654,7 +711,7 @@ MARKERS: dict[str, dict] = {
     },
     "kadm__direct": {
         "label_pl": "Kadm we krwi", "group": "metale",
-        "unit": "µg/l", "expression_type": "direct",
+        "unit": "µg/L", "expression_type": "direct",
         "optimal_low": None, "optimal_high": 0.3,
         "source_type": "HEURISTIC", "source_label": "Medycyna prewencyjna",
         "evidence_level": "low",
@@ -908,6 +965,126 @@ MARKERS: dict[str, dict] = {
         "evidence_level": "",
         "notes": "",
     },
+    "mch__direct": {
+        "label_pl": "MCH", "group": "morfologia",
+        "unit": "pg", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Średnia masa hemoglobiny w erytrocycie; interpretować łącznie z MCV/MCHC",
+    },
+    "rdw_cv__direct": {
+        "label_pl": "RDW-CV", "group": "morfologia",
+        "unit": "%", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Wskaźnik anizocytozy; norma lab ~11.5-14.5%",
+    },
+    "pct__direct": {
+        "label_pl": "PCT (plateletcrit)", "group": "morfologia",
+        "unit": "%", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Plateletcrit; interpretować łącznie z PLT i MPV",
+    },
+    "gran_kwasochlonne_rozmaz__pct": {
+        "label_pl": "Gran. Kwasochłonne (rozmaz)", "group": "morfologia",
+        "unit": "%", "expression_type": "pct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Rozmaz manualny; odrębny od eozynofili analizatora",
+    },
+    "gran_segmentowane_rozmaz__pct": {
+        "label_pl": "Gran. Segmentowane (rozmaz)", "group": "morfologia",
+        "unit": "%", "expression_type": "pct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Rozmaz manualny; odrębny od neutrofili analizatora",
+    },
+    "gran_zasadochlonne_rozmaz__pct": {
+        "label_pl": "Gran. Zasadochłonne (rozmaz)", "group": "morfologia",
+        "unit": "%", "expression_type": "pct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Rozmaz manualny; odrębny od bazofili analizatora",
+    },
+
+    # ======================================================================
+    # Koagulacja
+    # ======================================================================
+    "inr__direct": {
+        "label_pl": "INR", "group": "koagulacja",
+        "unit": "", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Wskaźnik koagulacji; norma lab ~0.8-1.2 dla osób bez leczenia przeciwkrzepliwego",
+    },
+    "wskaznik_protrombiny__direct": {
+        "label_pl": "Wskaźnik protrombiny", "group": "koagulacja",
+        "unit": "%", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": None,
+        "source_type": None, "source_label": "",
+        "evidence_level": "",
+        "notes": "Norma lab ~70-130%",
+    },
+
+    # ======================================================================
+    # Autoimmunologia
+    # ======================================================================
+    "anty_ccp__direct": {
+        "label_pl": "anty-CCP", "group": "autoimmunologia",
+        "unit": "U/ml", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 17.0,
+        "source_type": "HEURISTIC", "source_label": "Cutoff producenta testu",
+        "evidence_level": "moderate",
+        "notes": "Przeciwciała przeciw cyklicznym cytrulinowanym peptydom; marker RZS. Typowy cutoff seronegatywności 17-20 U/ml; zależny od producenta testu",
+    },
+    "rf_igm__direct": {
+        "label_pl": "Czynnik reumatoidalny RF IgM", "group": "autoimmunologia",
+        "unit": "TU/ml", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 14.0,
+        "source_type": "HEURISTIC", "source_label": "Cutoff producenta testu",
+        "evidence_level": "moderate",
+        "notes": "Czynnik reumatoidalny klasy IgM. Typowy cutoff seronegatywności ~14 TU/ml; zależny od producenta testu",
+    },
+    "anty_bp180__direct": {
+        "label_pl": "P/c. p. BP180", "group": "autoimmunologia",
+        "unit": "Ratio", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 1.0,
+        "source_type": "HEURISTIC", "source_label": "Cutoff producenta testu",
+        "evidence_level": "moderate",
+        "notes": "Przeciwciała przeciw BP180 (pemfigoid pęcherzowy). <1.0 ujemny, ≥1.0 dodatni (Euroimmun)",
+    },
+    "anty_bp230__direct": {
+        "label_pl": "P/c. p. BP230", "group": "autoimmunologia",
+        "unit": "Ratio", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 1.0,
+        "source_type": "HEURISTIC", "source_label": "Cutoff producenta testu",
+        "evidence_level": "moderate",
+        "notes": "Przeciwciała przeciw BP230 (pemfigoid pęcherzowy). <1.0 ujemny, ≥1.0 dodatni (Euroimmun)",
+    },
+    "anty_enwoplakin__direct": {
+        "label_pl": "P/c. p. enwoplakinie", "group": "autoimmunologia",
+        "unit": "Ratio", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 1.0,
+        "source_type": "HEURISTIC", "source_label": "Cutoff producenta testu",
+        "evidence_level": "moderate",
+        "notes": "Przeciwciała przeciw enwoplakinie (pemfigus paraneoplastyczny). <1.0 ujemny, ≥1.0 dodatni (Euroimmun)",
+    },
+    "anty_kolagen_vii__direct": {
+        "label_pl": "P/c. p. kolagenowi typu VII", "group": "autoimmunologia",
+        "unit": "Ratio", "expression_type": "direct",
+        "optimal_low": None, "optimal_high": 1.0,
+        "source_type": "HEURISTIC", "source_label": "Cutoff producenta testu",
+        "evidence_level": "moderate",
+        "notes": "Przeciwciała przeciw kolagenowi typu VII (epidermolysis bullosa acquisita). <1.0 ujemny, ≥1.0 dodatni (Euroimmun)",
+    },
 }
 
 
@@ -1027,8 +1204,33 @@ ALIAS_MAP: dict[tuple[str, str], str] = {
     ("Bazofile", "%"):                       "bazofile__pct",
     ("NRBC#", "*"):                          "nrbc__abs",
     ("NRBC%", "*"):                          "nrbc__pct",
+    ("NRBC", "%"):                           "nrbc__pct",
+    ("NRBC", "tys/µl"):                      "nrbc__abs",
     ("Niedojrzałe granulocyty IG %", "*"):   "ig__pct",
     ("Niedojrzałe granulocyty IG il.", "*"): "ig__abs",
+    ("MCH", "*"):                            "mch__direct",
+    ("RDW-CV", "*"):                         "rdw_cv__direct",
+    ("PCT", "*"):                            "pct__direct",
+    ("Gran. Kwasochłonne", "*"):             "gran_kwasochlonne_rozmaz__pct",
+    ("Gran. Segmentowane", "*"):             "gran_segmentowane_rozmaz__pct",
+    ("Gran. Zasadochłonne", "*"):            "gran_zasadochlonne_rozmaz__pct",
+
+    # Koagulacja
+    ("INR", "*"):                            "inr__direct",
+    ("Wskaźnik protrombiny", "*"):           "wskaznik_protrombiny__direct",
+
+    # Autoimmunologia
+    ("anty-CCP", "*"):                       "anty_ccp__direct",
+    ("Czynnik reumatoidalny RF IgM", "*"):   "rf_igm__direct",
+    ("P/c. p. BP180", "*"):                  "anty_bp180__direct",
+    ("P/c. p. BP230", "*"):                  "anty_bp230__direct",
+    ("P/c. p. enwoplakinie", "*"):           "anty_enwoplakin__direct",
+    ("P/c. p. kolagenowi typu VII", "*"):    "anty_kolagen_vii__direct",
+
+    # Lipidy / Nerki / Witaminy (Tier A)
+    ("Lp(a)", "*"):                          "lp_a__direct",
+    ("Kwas moczowy", "*"):                   "kwas_moczowy__direct",
+    ("Witamina B6", "*"):                    "witamina_b6__direct",
 
     # Kwasy tłuszczowe / Omega (PDF names)
     ("Indeks Omega-3", "*"):                  "indeks_omega3__direct",

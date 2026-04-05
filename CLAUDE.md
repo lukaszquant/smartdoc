@@ -78,6 +78,16 @@ Always use `_tmp*.py` for quick checks (dependency availability, data exploratio
 
 `wynki_diag/` (raw CSVs), `wyniki_pdf/` (PDF results), and `raport_zdrowotny.html` (generated report) contain personal health data. All are gitignored. Never commit these.
 
+## Keeping structured notes
+
+When implementing multi-step work (patches, new features, reviews), keep structured notes as you go. Update the relevant `NOTES/NOTES_PHASE*.md` file with:
+- What was changed and why
+- Validation results (counts, status checks, test outcomes)
+- Known differences or design decisions
+- Impact summary
+
+This ensures future conversations have full context without re-deriving it.
+
 ## Handling external reviews
 
 When reacting to an external review of the implementation:

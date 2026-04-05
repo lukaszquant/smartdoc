@@ -1978,9 +1978,8 @@ def generate_plotly_chart(
         fig.add_trace(go.Scatter(
             x=exact["collected_at"],
             y=exact["numeric_value"],
-            mode="lines+markers",
+            mode="markers",
             name=label,
-            line=dict(color="#2563eb", width=2),
             marker=dict(size=7, color="#2563eb"),
             hovertemplate=f"%{{x|%Y-%m-%d}}<br>{label}: %{{y:.2f}} {unit}<extra></extra>",
         ))
