@@ -76,6 +76,14 @@ This ensures the correct virtualenv is used and both stdout and stderr are captu
 
 Always use `_tmp*.py` for quick checks (dependency availability, data exploration, etc.) instead of running Python one-liners directly in the shell.
 
+## Running tests
+
+```bash
+.venv/bin/python3 -m unittest discover tests -v
+```
+
+pytest is not installed in `.venv/`. Use `unittest discover` for the test suite under `tests/`.
+
 ## Sensitive data
 
 `wynki_diag/` (raw CSVs), `wyniki_pdf/` (PDF results), and `raport_zdrowotny.html` (generated report) contain personal health data. All are gitignored. Never commit these.
