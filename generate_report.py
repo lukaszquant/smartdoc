@@ -1023,6 +1023,8 @@ def _rec(
     confidence: str = "moderate",
     specialist_pl: str = "",
     additional_tests_pl: list[str] | None = None,
+    specialist_bucket_id: str = "",
+    source_group: str = "",
 ) -> dict:
     """Build a recommendation dict."""
     return {
@@ -1036,6 +1038,8 @@ def _rec(
         "medical_escalation": medical_escalation,
         "specialist_pl": specialist_pl,
         "additional_tests_pl": additional_tests_pl or [],
+        "specialist_bucket_id": specialist_bucket_id,
+        "source_group": source_group,
     }
 
 
@@ -1074,29 +1078,82 @@ def _resolve_specialist_recs(
     """Return list of (specialist_pl, marker_subset, filtered_test_labels).
 
     One entry per distinct specialist. Splits markers in mixed-specialist groups.
+    Delegates to _resolve_marker_specialist() for routing each marker.
     """
-    # Partition markers: those with marker-level override vs group fallback
-    specialist_buckets: dict[str, tuple[list[str], list[dict]]] = {}
+    specialist_buckets: dict[str, tuple[list[str], list[str]]] = {}
 
     for mid in markers:
-        override = MARKER_SPECIALIST.get(mid)
-        if override:
-            spec = override["specialist_pl"]
-            tests = override.get("additional_tests", [])
-        else:
-            grp_info = GROUP_SPECIALIST.get(group, {})
-            spec = grp_info.get("specialist_pl", "")
-            tests = grp_info.get("additional_tests", [])
-
+        resolved = _resolve_marker_specialist(
+            group, mid, tested_marker_ids, tested_labels_norm,
+        )
+        spec = resolved["specialist_pl"]
         if spec not in specialist_buckets:
-            specialist_buckets[spec] = ([], tests)
+            specialist_buckets[spec] = ([], resolved["additional_tests_pl"])
         specialist_buckets[spec][0].append(mid)
 
-    result = []
-    for spec, (spec_markers, tests) in specialist_buckets.items():
-        filtered = _filter_tests(tests, tested_marker_ids, tested_labels_norm)
-        result.append((spec, spec_markers, filtered))
-    return result
+    return [
+        (spec, spec_markers, filtered_tests)
+        for spec, (spec_markers, filtered_tests) in specialist_buckets.items()
+    ]
+
+
+def _slugify_specialist_label(label: str) -> str:
+    """Convert a Polish specialist display label to a filesystem-safe ASCII slug.
+
+    Example: "diabetolog / endokrynolog" → "diabetolog_endokrynolog"
+    """
+    if not label:
+        return ""
+    import unicodedata
+    # Transliterate Polish chars, strip accents
+    nfkd = unicodedata.normalize("NFKD", label)
+    ascii_str = nfkd.encode("ascii", "ignore").decode("ascii")
+    # Replace separators and whitespace with underscores
+    ascii_str = re.sub(r"[/\s]+", "_", ascii_str)
+    # Remove anything that isn't alphanumeric or underscore
+    ascii_str = re.sub(r"[^a-zA-Z0-9_]", "", ascii_str)
+    # Collapse multiple underscores, strip leading/trailing
+    ascii_str = re.sub(r"_+", "_", ascii_str).strip("_")
+    return ascii_str.lower()
+
+
+def _specialist_bucket_id(label: str) -> str:
+    """Return a stable canonical ID for a specialist routing bucket.
+
+    Uses _slugify_specialist_label under the hood. Empty label → empty string.
+    """
+    return _slugify_specialist_label(label)
+
+
+def _resolve_marker_specialist(
+    group: str,
+    marker_id: str,
+    tested_marker_ids: set[str],
+    tested_labels_norm: set[str],
+) -> dict:
+    """Resolve the specialist routing for a single marker.
+
+    Returns a dict with specialist_bucket_id, specialist_pl, marker_id, group,
+    and additional_tests_pl (filtered against already-tested markers).
+    """
+    override = MARKER_SPECIALIST.get(marker_id)
+    if override:
+        spec = override["specialist_pl"]
+        tests_raw = override.get("additional_tests", [])
+    else:
+        grp_info = GROUP_SPECIALIST.get(group, {})
+        spec = grp_info.get("specialist_pl", "")
+        tests_raw = grp_info.get("additional_tests", [])
+
+    filtered_tests = _filter_tests(tests_raw, tested_marker_ids, tested_labels_norm)
+
+    return {
+        "specialist_bucket_id": _specialist_bucket_id(spec),
+        "specialist_pl": spec,
+        "marker_id": marker_id,
+        "group": group,
+        "additional_tests_pl": filtered_tests,
+    }
 
 
 def generate_recommendations(
@@ -1283,6 +1340,8 @@ def generate_recommendations(
                     confidence="high",
                     specialist_pl=specialist_pl,
                     additional_tests_pl=extra_tests,
+                    specialist_bucket_id=_specialist_bucket_id(specialist_pl),
+                    source_group=group,
                 ))
 
     # --- CBC declining pattern — extra emphasis ---
@@ -1313,6 +1372,8 @@ def generate_recommendations(
             confidence="high",
             specialist_pl="hematolog",
             additional_tests_pl=cbc_extra_tests,
+            specialist_bucket_id=_specialist_bucket_id("hematolog"),
+            source_group="morfologia",
         ))
 
     # ===================================================================
@@ -1746,7 +1807,8 @@ def generate_recommendations(
         columns=["category", "priority", "marker_ids", "text_pl",
                  "rationale_pl", "evidence", "confidence",
                  "medical_escalation", "specialist_pl",
-                 "additional_tests_pl"]
+                 "additional_tests_pl", "specialist_bucket_id",
+                 "source_group"]
     )
 
 
@@ -1794,6 +1856,241 @@ def print_phase5_summary(rec_df: pd.DataFrame) -> None:
                 print(f"    📎 {row['evidence']}")
 
     print("\n" + "=" * 72)
+
+
+# ---------------------------------------------------------------------------
+# Specialist report generation
+# ---------------------------------------------------------------------------
+
+def build_specialist_report_specs(
+    rec_df: pd.DataFrame,
+    status_df: pd.DataFrame,
+) -> list[dict]:
+    """Build specialist report specifications from triggered medical recommendations.
+
+    Walks all tested markers and routes each through the specialist resolution
+    helper. Includes a marker in a report only if its resolved bucket matches
+    a triggered consultation bucket.
+
+    Returns a list of spec dicts sorted by specialist_bucket_id.
+    """
+    if rec_df.empty:
+        return []
+
+    # Step 1: Find triggered specialist buckets from medical recommendations
+    medical = rec_df[
+        (rec_df["category"] == _CAT_MEDICAL)
+        & (rec_df["specialist_bucket_id"].astype(str).str.len() > 0)
+    ]
+    if medical.empty:
+        return []
+
+    # Collect trigger info per bucket
+    bucket_triggers: dict[str, dict] = {}
+    for _, row in medical.iterrows():
+        bid = row["specialist_bucket_id"]
+        if bid not in bucket_triggers:
+            bucket_triggers[bid] = {
+                "specialist_bucket_id": bid,
+                "specialist_pl": row["specialist_pl"],
+                "trigger_marker_ids": [],
+                "additional_tests_pl": [],
+                "source_groups": [],
+            }
+        bucket_triggers[bid]["trigger_marker_ids"].extend(row["marker_ids"])
+        bucket_triggers[bid]["additional_tests_pl"].extend(row["additional_tests_pl"])
+        if row["source_group"] and row["source_group"] not in bucket_triggers[bid]["source_groups"]:
+            bucket_triggers[bid]["source_groups"].append(row["source_group"])
+
+    triggered_bucket_ids = set(bucket_triggers.keys())
+
+    # Step 2: Build sets for additional-test filtering
+    tested_marker_ids = set(status_df["marker_id"])
+    tested_labels_norm = {
+        _norm_label(MARKERS[mid].get("label_pl", ""))
+        for mid in tested_marker_ids
+        if mid in MARKERS and MARKERS[mid].get("label_pl")
+    }
+
+    # Step 3: Route every tested marker and assign to buckets
+    bucket_markers: dict[str, list[str]] = {bid: [] for bid in triggered_bucket_ids}
+    bucket_groups: dict[str, list[str]] = {bid: [] for bid in triggered_bucket_ids}
+
+    for _, srow in status_df.iterrows():
+        mid = srow["marker_id"]
+        group = srow["group"]
+        resolved = _resolve_marker_specialist(
+            group, mid, tested_marker_ids, tested_labels_norm,
+        )
+        bid = resolved["specialist_bucket_id"]
+        if bid in triggered_bucket_ids:
+            if mid not in bucket_markers[bid]:
+                bucket_markers[bid].append(mid)
+            if group not in bucket_groups[bid]:
+                bucket_groups[bid].append(group)
+
+    # Step 4: Assemble specs
+    group_order = {g: i for i, g in enumerate(GROUPS.keys())}
+    specs = []
+    for bid in sorted(triggered_bucket_ids):
+        report_marker_ids = bucket_markers[bid]
+        if not report_marker_ids:
+            continue
+
+        trigger_info = bucket_triggers[bid]
+        # Deduplicate trigger_marker_ids preserving order
+        seen = set()
+        dedup_triggers = []
+        for m in trigger_info["trigger_marker_ids"]:
+            if m not in seen:
+                seen.add(m)
+                dedup_triggers.append(m)
+
+        # Deduplicate additional_tests_pl preserving first-seen order
+        seen_tests: set[str] = set()
+        dedup_tests: list[str] = []
+        for t in trigger_info["additional_tests_pl"]:
+            if t not in seen_tests:
+                seen_tests.add(t)
+                dedup_tests.append(t)
+
+        # Merge source_groups from triggers + routed markers, sorted by GROUPS order
+        all_groups = list(trigger_info["source_groups"])
+        for g in bucket_groups[bid]:
+            if g not in all_groups:
+                all_groups.append(g)
+        all_groups.sort(key=lambda g: group_order.get(g, 999))
+
+        specs.append({
+            "specialist_bucket_id": bid,
+            "specialist_pl": trigger_info["specialist_pl"],
+            "trigger_marker_ids": dedup_triggers,
+            "report_marker_ids": report_marker_ids,
+            "source_groups": all_groups,
+            "additional_tests_pl": dedup_tests,
+        })
+
+    return specs
+
+
+def build_specialist_context(
+    spec: dict,
+    df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    trend_df: pd.DataFrame,
+) -> dict:
+    """Build template context for a single specialist report.
+
+    Reuses the same status/trend/chart logic as the main report.
+    """
+    marker_set = set(spec["report_marker_ids"])
+    trigger_set = set(spec["trigger_marker_ids"])
+
+    # Filter status_df to report markers only
+    spec_status = status_df[status_df["marker_id"].isin(marker_set)].copy()
+
+    # Build marker sections grouped by source group
+    group_order = list(GROUPS.keys())
+    sections = []
+
+    for group_key in group_order:
+        if group_key not in spec["source_groups"]:
+            continue
+        grp_status = spec_status[spec_status["group"] == group_key]
+        if grp_status.empty:
+            continue
+
+        markers_data = []
+        for _, srow in grp_status.iterrows():
+            mid = srow["marker_id"]
+            trend_rows = trend_df[trend_df["marker_id"] == mid]
+            trend_row = trend_rows.iloc[0] if len(trend_rows) else None
+
+            chart_html = generate_plotly_chart(df, mid, srow)
+
+            val = srow["numeric_value"]
+            comp = srow["comparator"]
+            val_str = (
+                f"{comp}{val}" if comp
+                else (f"{val}" if val is not None and pd.notna(val) else "—")
+            )
+
+            markers_data.append({
+                "marker_id": mid,
+                "label": srow["marker_label_pl"],
+                "value_str": val_str,
+                "unit": srow["unit"],
+                "lab_range": _format_range(srow["lab_low"], srow["lab_high"]),
+                "opt_range": _format_range(
+                    srow.get("optimal_low"), srow.get("optimal_high"),
+                ),
+                "status": srow["status"],
+                "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
+                "status_icon": _STATUS_ICONS.get(srow["status"], ""),
+                "severity": srow["severity"],
+                "is_trigger": mid in trigger_set,
+                "n_measurements": (
+                    int(trend_row.get("total_observations",
+                                      trend_row["n_measurements"]))
+                    if trend_row is not None else 1
+                ),
+                "direction": (
+                    trend_row["direction"] if trend_row is not None else ""
+                ),
+                "direction_arrow": (
+                    "" if trend_row is not None and trend_row["direction"] == "stabilny"
+                    else _DIRECTION_ARROWS.get(trend_row["direction"], "")
+                    if trend_row is not None else ""
+                ),
+                "direction_color": (
+                    _DIRECTION_COLORS.get(trend_row["direction"], "#64748b")
+                    if trend_row is not None else "#64748b"
+                ),
+                "math_arrow": (
+                    "↑" if trend_row is not None and trend_row["delta_pct"] > 0
+                    else "↓" if trend_row is not None and trend_row["delta_pct"] < 0
+                    else "→" if trend_row is not None
+                    else ""
+                ),
+                "delta_pct": (
+                    f"{trend_row['delta_pct']:+.1f}%"
+                    if trend_row is not None else ""
+                ),
+                "confidence": (
+                    trend_row["confidence"] if trend_row is not None else "none"
+                ),
+                "chart_html": chart_html,
+                "collected_date": str(srow["collected_date"]),
+            })
+
+        sections.append({
+            "group_key": group_key,
+            "group_label": GROUPS[group_key],
+            "markers": markers_data,
+        })
+
+    # Build trigger marker labels for the rationale section
+    trigger_markers = []
+    for mid in spec["trigger_marker_ids"]:
+        meta = MARKERS.get(mid, {})
+        label = meta.get("label_pl", mid)
+        rows = status_df[status_df["marker_id"] == mid]
+        status = rows.iloc[0]["status"] if len(rows) else ""
+        trigger_markers.append({"label": label, "status": status})
+
+    return {
+        "report_date": date.today().isoformat(),
+        "specialist_bucket_id": spec["specialist_bucket_id"],
+        "specialist_pl": spec["specialist_pl"],
+        "trigger_markers": trigger_markers,
+        "source_groups": [
+            {"key": g, "label": GROUPS.get(g, g)}
+            for g in spec["source_groups"]
+        ],
+        "marker_sections": sections,
+        "additional_tests": spec["additional_tests_pl"],
+        "total_markers": sum(len(s["markers"]) for s in sections),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2214,6 +2511,53 @@ def render_html(
     return template.render(**context)
 
 
+def render_specialist_html(
+    spec: dict,
+    df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    trend_df: pd.DataFrame,
+) -> str:
+    """Render a single specialist consultation report as HTML."""
+    context = build_specialist_context(spec, df, status_df, trend_df)
+
+    template_dir = Path(__file__).parent
+    env = Environment(
+        loader=FileSystemLoader(template_dir),
+        autoescape=True,
+    )
+    template = env.get_template("report_specialist_template.html")
+    return template.render(**context)
+
+
+def generate_specialist_reports(
+    rec_df: pd.DataFrame,
+    df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    trend_df: pd.DataFrame,
+) -> list[Path]:
+    """Generate specialist consultation reports for all triggered buckets.
+
+    Returns list of written file paths.
+    """
+    specs = build_specialist_report_specs(rec_df, status_df)
+    if not specs:
+        return []
+
+    output_dir = OUTPUT_PATH.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_date = date.today().isoformat()
+
+    written: list[Path] = []
+    for spec in specs:
+        html = render_specialist_html(spec, df, status_df, trend_df)
+        filename = f"raport_konsultacja_{spec['specialist_bucket_id']}_{report_date}.html"
+        path = output_dir / filename
+        path.write_text(html, encoding="utf-8")
+        written.append(path)
+
+    return written
+
+
 # ---------------------------------------------------------------------------
 # Diagnostics / Phase 1 entry point
 # ---------------------------------------------------------------------------
@@ -2323,6 +2667,18 @@ def main():
     output_path = OUTPUT_PATH
     output_path.write_text(html, encoding="utf-8")
     LOG.info("Report saved to %s (%d KB)", output_path.name, len(html) // 1024)
+
+    # Specialist consultation reports
+    LOG.info("Generating specialist consultation reports...")
+    specialist_paths = generate_specialist_reports(rec_df, df, status_df, trend_df)
+    if specialist_paths:
+        LOG.info(
+            "Specialist reports: %d written (%s)",
+            len(specialist_paths),
+            ", ".join(p.name for p in specialist_paths),
+        )
+    else:
+        LOG.info("No specialist consultation reports needed.")
 
     return df, status_df, trend_df, rec_df
 

@@ -78,6 +78,16 @@ Always use `_tmp*.py` for quick checks (dependency availability, data exploratio
 
 `wynki_diag/` (raw CSVs), `wyniki_pdf/` (PDF results), and `raport_zdrowotny.html` (generated report) contain personal health data. All are gitignored. Never commit these.
 
+## Planning new features
+
+When planning a new feature or significant change:
+
+1. **Create a plan file** in `PLAN/<FEATURE_NAME>/PLAN_v1.md` (increment version for revisions).
+2. **Present the plan** to the user for approval before implementing.
+3. Plans stay in `PLAN/` for reference — they are gitignored.
+
+Do NOT put plans inline in the conversation. Always write them to a file.
+
 ## Handling external reviews
 
 When reacting to an external review of the implementation:
