@@ -57,6 +57,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 10px; }
 .badge-granica { background: #fef9c3; color: #854d0e; }
 .badge-opt { background: #ffedd5; color: #9a3412; }
 .badge-normy { background: #fecaca; color: #991b1b; }
+.badge-normy-mild { background: #fed7aa; color: #9a3412; }
+.badge-normy-severe { background: #fecaca; color: #991b1b; }
 .badge-unknown { background: #f1f5f9; color: #475569; }
 
 /* Marker table */
@@ -167,9 +169,7 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 10px; }
       {% for t in trigger_markers %}
       <li>
         <strong>{{ t.label }}</strong>
-        <span class="badge {% if 'NORMY' in t.status %}badge-normy{% elif 'OPT' in t.status %}badge-opt{% else %}badge-unknown{% endif %}">
-          {{ t.status }}
-        </span>
+        <span class="badge {{ t.badge_class }}">{{ t.badge_label }}</span>
       </li>
       {% endfor %}
     </ul>
@@ -203,9 +203,7 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 10px; }
           <td class="range">{{ m.lab_range }}</td>
           <td class="range">{{ m.opt_range }}</td>
           <td>
-            <span class="badge {% if m.status == 'OK' %}badge-ok{% elif m.status == 'GRANICA OPT' %}badge-granica{% elif 'NORMY' in m.status %}badge-normy{% elif 'OPT' in m.status %}badge-opt{% else %}badge-unknown{% endif %}">
-              {{ m.status_icon }} {{ m.status }}
-            </span>
+            <span class="badge {{ m.badge_class }}">{{ m.badge_label }}</span>
           </td>
           <td class="trend">
             {% if m.direction %}

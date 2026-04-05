@@ -533,17 +533,22 @@ def assess_status(
     Returns
     -------
     dict with keys:
-        status   — "OK", "POWYŻEJ NORMY", "PONIŻEJ NORMY",
-                    "POWYŻEJ OPT", "PONIŻEJ OPT", "GRANICA OPT",
-                    "BRAK DANYCH", "WARTOŚĆ PROGOWA"
-        severity — "none", "low", "moderate", "high", "unknown"
-        basis    — "lab", "optimal", "data_quality", "threshold"
-        detail   — optional clarification string
+        status          — "OK", "POWYŻEJ NORMY", "PONIŻEJ NORMY",
+                           "POWYŻEJ OPT", "PONIŻEJ OPT", "GRANICA OPT",
+                           "BRAK DANYCH", "WARTOŚĆ PROGOWA"
+        severity        — "none", "low", "moderate", "high", "unknown"
+        basis           — "lab", "optimal", "data_quality", "threshold"
+        detail          — optional clarification string
+        deviation_pct   — magnitude percent outside crossed lab boundary
+                           (for POWYŻEJ/PONIŻEJ NORMY), else None
+        deviation_tier  — "mild" (<10%) or "severe" (>=10%) for lab-range
+                           statuses, else None
     """
     # No numeric value at all
     if numeric_value is None:
         return {"status": "BRAK DANYCH", "severity": "unknown",
-                "basis": "data_quality", "detail": ""}
+                "basis": "data_quality", "detail": "",
+                "deviation_pct": None, "deviation_tier": None}
 
     # --- Threshold values (<, >) — best-effort assessment ---
     if comparator in ("<", "≤"):
@@ -552,34 +557,45 @@ def assess_status(
         effective_high = optimal_high if optimal_high is not None else lab_high
         if effective_high is not None and numeric_value <= effective_high:
             return {"status": "OK", "severity": "none",
-                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}"}
+                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "WARTOŚĆ PROGOWA", "severity": "unknown",
                 "basis": "threshold",
-                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić"}
+                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić",
+                "deviation_pct": None, "deviation_tier": None}
 
     if comparator in (">", "≥"):
         effective_low = optimal_low if optimal_low is not None else lab_low
         if effective_low is not None and numeric_value >= effective_low:
             return {"status": "OK", "severity": "none",
-                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}"}
+                    "basis": "threshold", "detail": f"wartość {comparator}{numeric_value}",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "WARTOŚĆ PROGOWA", "severity": "unknown",
                 "basis": "threshold",
-                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić"}
+                "detail": f"wartość {comparator}{numeric_value}; nie można ocenić",
+                "deviation_pct": None, "deviation_tier": None}
 
     # --- Lab range check (takes priority — outside lab = most severe) ---
     if lab_low is not None and numeric_value < lab_low:
-        return {"status": "PONIŻEJ NORMY", "severity": "high",
-                "basis": "lab", "detail": ""}
+        dev_pct, tier = _lab_deviation(numeric_value, lab_low)
+        sev = "high" if tier == "severe" else "moderate"
+        return {"status": "PONIŻEJ NORMY", "severity": sev,
+                "basis": "lab", "detail": "",
+                "deviation_pct": dev_pct, "deviation_tier": tier}
     if lab_high is not None and numeric_value > lab_high:
-        return {"status": "POWYŻEJ NORMY", "severity": "high",
-                "basis": "lab", "detail": ""}
+        dev_pct, tier = _lab_deviation(numeric_value, lab_high)
+        sev = "high" if tier == "severe" else "moderate"
+        return {"status": "POWYŻEJ NORMY", "severity": sev,
+                "basis": "lab", "detail": "",
+                "deviation_pct": dev_pct, "deviation_tier": tier}
 
     # --- Optimal range check ---
     has_optimal = optimal_low is not None or optimal_high is not None
     if not has_optimal:
         # No optimal range defined — within lab range is the best we can say
         return {"status": "OK", "severity": "none",
-                "basis": "lab", "detail": "brak zakresu optymalnego"}
+                "basis": "lab", "detail": "brak zakresu optymalnego",
+                "deviation_pct": None, "deviation_tier": None}
 
     below_opt = optimal_low is not None and numeric_value < optimal_low
     above_opt = optimal_high is not None and numeric_value > optimal_high
@@ -587,20 +603,46 @@ def assess_status(
     if below_opt:
         if _is_near_boundary(numeric_value, optimal_low):
             return {"status": "GRANICA OPT", "severity": "low",
-                    "basis": "optimal", "detail": "blisko dolnej granicy"}
+                    "basis": "optimal", "detail": "blisko dolnej granicy",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "PONIŻEJ OPT", "severity": "moderate",
-                "basis": "optimal", "detail": ""}
+                "basis": "optimal", "detail": "",
+                "deviation_pct": None, "deviation_tier": None}
 
     if above_opt:
         if _is_near_boundary(numeric_value, optimal_high):
             return {"status": "GRANICA OPT", "severity": "low",
-                    "basis": "optimal", "detail": "blisko górnej granicy"}
+                    "basis": "optimal", "detail": "blisko górnej granicy",
+                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "POWYŻEJ OPT", "severity": "moderate",
-                "basis": "optimal", "detail": ""}
+                "basis": "optimal", "detail": "",
+                "deviation_pct": None, "deviation_tier": None}
 
     # Within optimal range → OK (no inside-range GRANICA)
     return {"status": "OK", "severity": "none",
-            "basis": "optimal", "detail": ""}
+            "basis": "optimal", "detail": "",
+            "deviation_pct": None, "deviation_tier": None}
+
+
+# Cutoff between mild and severe lab-range deviation, in percent.
+_LAB_DEVIATION_SEVERE_PCT = 10.0
+
+
+def _lab_deviation(
+    value: float, boundary: float,
+) -> tuple[float, str]:
+    """Compute magnitude % distance from the crossed lab boundary.
+
+    Returns (deviation_pct, tier) where tier is "mild" (<10%) or
+    "severe" (>=10%).  When the boundary is zero, falls back to
+    absolute distance and marks any non-zero deviation as "severe".
+    """
+    if boundary == 0:
+        dev = abs(value - boundary)
+        return dev, ("severe" if dev > 0 else "mild")
+    dev_pct = abs(value - boundary) / abs(boundary) * 100.0
+    tier = "severe" if dev_pct >= _LAB_DEVIATION_SEVERE_PCT else "mild"
+    return dev_pct, tier
 
 
 def _is_near_boundary(value: float, boundary: float) -> bool:
@@ -663,6 +705,8 @@ def assess_all_statuses(df: pd.DataFrame) -> pd.DataFrame:
             "severity": result["severity"],
             "basis": result["basis"],
             "detail": result["detail"],
+            "deviation_pct": result.get("deviation_pct"),
+            "deviation_tier": result.get("deviation_tier"),
             "source_type": meta.get("source_type", ""),
             "source_label": meta.get("source_label", ""),
             "evidence_level": meta.get("evidence_level", ""),
@@ -734,6 +778,18 @@ def print_phase3_summary(status_df: pd.DataFrame) -> None:
         if n > 0:
             print(f"  {status:20s}: {n}")
     print(f"  {'TOTAL':20s}: {len(status_df)}")
+
+    # Lab-range deviation tier breakdown
+    lab_out = status_df[
+        status_df["status"].isin(["POWYŻEJ NORMY", "PONIŻEJ NORMY"])
+    ]
+    if len(lab_out):
+        tier_counts = lab_out["deviation_tier"].value_counts().to_dict()
+        mild = int(tier_counts.get("mild", 0))
+        severe = int(tier_counts.get("severe", 0))
+        print(f"\n--- Out-of-lab deviation tiers ---")
+        print(f"  {'out_of_lab_mild':20s}: {mild}")
+        print(f"  {'out_of_lab_severe':20s}: {severe}")
 
     # Highlight items requiring attention
     attention = status_df[status_df["severity"].isin(["high", "moderate"])]
@@ -2015,6 +2071,9 @@ def build_specialist_context(
                 else (f"{val}" if val is not None and pd.notna(val) else "—")
             )
 
+            status_icon = _STATUS_ICONS.get(srow["status"], "")
+            dev_tier = srow.get("deviation_tier")
+            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier)
             markers_data.append({
                 "marker_id": mid,
                 "label": srow["marker_label_pl"],
@@ -2026,7 +2085,11 @@ def build_specialist_context(
                 ),
                 "status": srow["status"],
                 "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
-                "status_icon": _STATUS_ICONS.get(srow["status"], ""),
+                "status_icon": status_icon,
+                "deviation_pct": srow.get("deviation_pct"),
+                "deviation_tier": dev_tier,
+                "badge_class": badge_meta["badge_class"],
+                "badge_label": badge_meta["badge_label"],
                 "severity": srow["severity"],
                 "is_trigger": mid in trigger_set,
                 "n_measurements": (
@@ -2075,8 +2138,23 @@ def build_specialist_context(
         meta = MARKERS.get(mid, {})
         label = meta.get("label_pl", mid)
         rows = status_df[status_df["marker_id"] == mid]
-        status = rows.iloc[0]["status"] if len(rows) else ""
-        trigger_markers.append({"label": label, "status": status})
+        if len(rows):
+            srow = rows.iloc[0]
+            status = srow["status"]
+            dev_tier = srow.get("deviation_tier")
+        else:
+            status = ""
+            dev_tier = None
+        status_icon = _STATUS_ICONS.get(status, "")
+        badge_meta = _status_badge_meta(status, status_icon, dev_tier)
+        trigger_markers.append({
+            "label": label,
+            "status": status,
+            "status_icon": status_icon,
+            "deviation_tier": dev_tier,
+            "badge_class": badge_meta["badge_class"],
+            "badge_label": badge_meta["badge_label"],
+        })
 
     return {
         "report_date": date.today().isoformat(),
@@ -2119,6 +2197,43 @@ _STATUS_ICONS: dict[str, str] = {
     "BRAK DANYCH": "?",
     "WARTOŚĆ PROGOWA": "~",
 }
+
+def _status_badge_meta(
+    status: str,
+    status_icon: str,
+    deviation_tier: str | None,
+) -> dict:
+    """Compute badge CSS class + display label for a marker status.
+
+    Centralizes the fallback logic shared by the main report marker
+    badge, the specialist trigger badge, and the specialist marker
+    badge.  Missing/unknown deviation_tier for a NORMY status falls
+    back to the plain badge-normy class (never severe) so that gaps
+    in data are not visually escalated.
+    """
+    icon = (status_icon or "").strip()
+    prefix = f"{icon} " if icon else ""
+
+    if status == "OK":
+        return {"badge_class": "badge-ok", "badge_label": f"{prefix}{status}"}
+    if status == "GRANICA OPT":
+        return {"badge_class": "badge-granica", "badge_label": f"{prefix}{status}"}
+    if status in ("POWYŻEJ OPT", "PONIŻEJ OPT"):
+        return {"badge_class": "badge-opt", "badge_label": f"{prefix}{status}"}
+    if status in ("POWYŻEJ NORMY", "PONIŻEJ NORMY"):
+        if deviation_tier == "mild":
+            return {
+                "badge_class": "badge-normy-mild",
+                "badge_label": f"{prefix}{status} (<10%)",
+            }
+        if deviation_tier == "severe":
+            return {
+                "badge_class": "badge-normy-severe",
+                "badge_label": f"{prefix}{status} (\u226510%)",
+            }
+        return {"badge_class": "badge-normy", "badge_label": f"{prefix}{status}"}
+    return {"badge_class": "badge-unknown", "badge_label": f"{prefix}{status}"}
+
 
 _DIRECTION_ARROWS: dict[str, str] = {
     "poprawa": "✓",
@@ -2313,6 +2428,9 @@ def _build_group_sections(
             comp = srow["comparator"]
             val_str = f"{comp}{val}" if comp else (f"{val}" if val is not None and pd.notna(val) else "—")
 
+            status_icon = _STATUS_ICONS.get(srow["status"], "")
+            dev_tier = srow.get("deviation_tier")
+            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier)
             markers_data.append({
                 "marker_id": mid,
                 "label": srow["marker_label_pl"],
@@ -2322,7 +2440,11 @@ def _build_group_sections(
                 "opt_range": _format_range(srow.get("optimal_low"), srow.get("optimal_high")),
                 "status": srow["status"],
                 "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
-                "status_icon": _STATUS_ICONS.get(srow["status"], ""),
+                "status_icon": status_icon,
+                "deviation_pct": srow.get("deviation_pct"),
+                "deviation_tier": dev_tier,
+                "badge_class": badge_meta["badge_class"],
+                "badge_label": badge_meta["badge_label"],
                 "severity": srow["severity"],
                 "n_measurements": int(trend_row.get("total_observations", trend_row["n_measurements"])) if trend_row is not None else 1,
                 "direction": trend_row["direction"] if trend_row is not None else "",
