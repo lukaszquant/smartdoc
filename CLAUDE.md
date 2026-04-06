@@ -7,7 +7,7 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 1. **Data ingestion** — parse semicolon-delimited CSVs from `wynki_diag/` and PDFs from `wyniki_pdf/` (OCR via tesseract for Diagnostyka/Read-Gene, pdfplumber for Omega), normalize dates, handle comparators (`<`, `>`)
 2. **Deduplication** — consolidate duplicate files (e.g. `(1)` suffixes), resolve conflicting values
 3. **Marker catalog** — canonical `marker_id` mapping, optimal ranges (preventive medicine, not just lab norms), status assessment (OK / GRANICA OPT / POWYŻEJ OPT / POWYŻEJ NORMY / etc.)
-4. **Trend analysis** — linear regression on time series, confidence levels, direction interpretation (clinical vs mathematical)
+4. **Trend analysis** — Theil–Sen slope + Mann–Kendall test with sufficiency gate, bootstrap CI, same-day collapse; trend states (supported_up/down, no_clear_trend, insufficient)
 5. **Recommendations** — prioritized, Polish-language recs covering diet, supplementation, lifestyle, retesting
 6. **HTML report** — Jinja2 template with Plotly interactive charts, trend summaries, color-coded status badges
 
@@ -15,7 +15,7 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 
 | File | Description |
 |---|---|
-| `generate_report.py` | Main script (~2180 lines) — all 6 phases |
+| `generate_report.py` | Main script (~3300 lines) — all 6 phases |
 | `config.json` | Local config for data paths (gitignored, see `config.example.json`) |
 | `config.example.json` | Example config template with default relative paths |
 | `pdf_parser.py` | PDF extraction layer — OCR (Diagnostyka, Read-Gene) + pdfplumber (Omega), with per-file cache |
@@ -29,7 +29,9 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 | `PLAN/ANALIZY/v1/` | Original project plan in Polish |
 | `PLAN/PDF_INGESTION/` | PDF ingestion plans, reviews, validations (v1–v3) |
 | `PLAN/SPECIALIST_RECS/` | Specialist recommendations plan and review |
+| `PLAN/TREND_ROBUSTNESS/` | Trend robustness refactor plan and review |
 | `NOTES/` | Implementation notes (NOTES_PHASE1–6.md, NOTES_PDF_CACHE.md) |
+| `tests/` | pytest test suite (trend stats, trend state, ingestion, recs, etc.) |
 
 ## Tech stack
 
@@ -83,10 +85,8 @@ Always use `_tmp*.py` for quick checks (dependency availability, data exploratio
 ## Running tests
 
 ```bash
-.venv/bin/python3 -m unittest discover tests -v
+.venv/bin/python3 -m pytest tests/ -q
 ```
-
-pytest is not installed in `.venv/`. Use `unittest discover` for the test suite under `tests/`.
 
 ## PDF cache and PARSER_VERSION
 
