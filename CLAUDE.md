@@ -68,10 +68,16 @@ Set `SMARTDOC_NO_PDF_CACHE=1` to disable the PDF extraction cache for a run.
 
 ## Running temporary test scripts
 
-Use the **Write tool** to create throwaway scripts as `_tmp.py` (or `_tmp_check.py`, `_tmp_test.py`, etc.) in the project root, then run with:
+Use the **Write tool** to create throwaway scripts as `_tmp_<unique>.py` (e.g., `_tmp_a3f2.py`, `_tmp_check_9x.py`) in the project root. Use a short random suffix to avoid conflicts when multiple sessions run in parallel. Then run with:
 
 ```bash
-.venv/bin/python3 _tmp.py 2>&1
+.venv/bin/python3 _tmp_<unique>.py 2>&1
+```
+
+Clean up after use:
+
+```bash
+rm _tmp_*.py
 ```
 
 Do NOT use `cat << 'PYEOF'`, `python3 << 'EOF'`, or any bash heredocs — use the Write tool to create the file, then run it. This keeps both steps auto-approved.
