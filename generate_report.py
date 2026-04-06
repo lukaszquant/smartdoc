@@ -2686,7 +2686,7 @@ def generate_plotly_chart(
         plot_bgcolor="white",
         paper_bgcolor="white",
         showlegend=False,
-        xaxis=dict(gridcolor="#f1f5f9"),
+        xaxis=dict(gridcolor="#f1f5f9", range=[x_min, x_max]),
         yaxis=dict(gridcolor="#f1f5f9", range=[y_lo, y_hi]),
         font=dict(size=11),
     )
@@ -3110,7 +3110,7 @@ async () => {
 
   for (const gd of graphDivs) {
     if (gd._fullLayout) {
-      Plotly.Plots.resize(gd);
+      await Plotly.Plots.resize(gd);
     }
   }
 
@@ -3180,9 +3180,13 @@ def html_to_pdf(context, html_path: Path, pdf_path: Path) -> None:
     """Render a single HTML file to PDF using an existing Playwright browser context."""
     page = context.new_page()
     try:
+        # Emulate print media BEFORE loading the page so that chart
+        # containers (display:block in @media print) are visible when
+        # Plotly first renders.  This prevents zero-width axis ranges
+        # that clip the most recent data points.
+        page.emulate_media(media="print")
         file_url = f"file://{html_path.resolve()}"
         page.goto(file_url, wait_until="networkidle")
-        page.emulate_media(media="print")
 
         plotly_available = page.evaluate("() => typeof window.Plotly !== 'undefined'")
         if plotly_available:
