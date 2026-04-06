@@ -545,11 +545,6 @@ def print_phase2_summary(df: pd.DataFrame, stats: dict) -> None:
 # Phase 3: Status assessment
 # ---------------------------------------------------------------------------
 
-# Margin for "GRANICA OPT" detection: value just outside the optimal range
-# but within this fraction of the boundary is borderline rather than a clear
-# deviation.  1% matches plan's hand-assigned status for Selen (99.62 vs 100).
-# Values inside the optimal range are always OK — GRANICA only applies outside.
-_GRANICA_MARGIN = 0.01
 
 
 def assess_status(
@@ -566,13 +561,13 @@ def assess_status(
     -------
     dict with keys:
         status          — "OK", "POWYŻEJ NORMY", "PONIŻEJ NORMY",
-                           "GRANICA OPT", "BRAK DANYCH", "WARTOŚĆ PROGOWA"
+                           "BRAK DANYCH", "WARTOŚĆ PROGOWA"
         severity        — "none", "low", "moderate", "high", "unknown"
         basis           — "lab", "optimal", "data_quality", "threshold"
         detail          — optional clarification string
         deviation_pct   — magnitude percent outside crossed lab boundary
                            (for POWYŻEJ/PONIŻEJ NORMY), else None
-        deviation_tier  — "mild" (<10%) or "severe" (>=10%) for lab-range
+        deviation_tier  — "mild" (<10%), "moderate" (10-25%), or "severe" (>25%) for lab-range
                            statuses, else None
     """
     # No numeric value at all
@@ -633,31 +628,24 @@ def assess_status(
     above_opt = optimal_high is not None and numeric_value > optimal_high
 
     if below_opt:
-        if _is_near_boundary(numeric_value, optimal_low):
-            return {"status": "GRANICA OPT", "severity": "low",
-                    "basis": "optimal", "detail": "blisko dolnej granicy",
-                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "OK", "severity": "none",
                 "basis": "optimal", "detail": "poniżej zakresu optymalnego",
                 "deviation_pct": None, "deviation_tier": None}
 
     if above_opt:
-        if _is_near_boundary(numeric_value, optimal_high):
-            return {"status": "GRANICA OPT", "severity": "low",
-                    "basis": "optimal", "detail": "blisko górnej granicy",
-                    "deviation_pct": None, "deviation_tier": None}
         return {"status": "OK", "severity": "none",
                 "basis": "optimal", "detail": "powyżej zakresu optymalnego",
                 "deviation_pct": None, "deviation_tier": None}
 
-    # Within optimal range → OK (no inside-range GRANICA)
+    # Within optimal range → OK
     return {"status": "OK", "severity": "none",
             "basis": "optimal", "detail": "",
             "deviation_pct": None, "deviation_tier": None}
 
 
 # Cutoff between mild and severe lab-range deviation, in percent.
-_LAB_DEVIATION_SEVERE_PCT = 10.0
+_LAB_DEVIATION_MODERATE_PCT = 10.0
+_LAB_DEVIATION_SEVERE_PCT = 25.0
 
 
 def _lab_deviation(
@@ -665,23 +653,25 @@ def _lab_deviation(
 ) -> tuple[float, str]:
     """Compute magnitude % distance from the crossed lab boundary.
 
-    Returns (deviation_pct, tier) where tier is "mild" (<10%) or
-    "severe" (>=10%).  When the boundary is zero, falls back to
-    absolute distance and marks any non-zero deviation as "severe".
+    Returns (deviation_pct, tier) where tier is:
+      "mild"     — <10%
+      "moderate" — 10-25%
+      "severe"   — >25%
+    When the boundary is zero, falls back to absolute distance and
+    marks any non-zero deviation as "severe".
     """
     if boundary == 0:
         dev = abs(value - boundary)
         return dev, ("severe" if dev > 0 else "mild")
     dev_pct = abs(value - boundary) / abs(boundary) * 100.0
-    tier = "severe" if dev_pct >= _LAB_DEVIATION_SEVERE_PCT else "mild"
+    if dev_pct >= _LAB_DEVIATION_SEVERE_PCT:
+        tier = "severe"
+    elif dev_pct >= _LAB_DEVIATION_MODERATE_PCT:
+        tier = "moderate"
+    else:
+        tier = "mild"
     return dev_pct, tier
 
-
-def _is_near_boundary(value: float, boundary: float) -> bool:
-    """Check if value is within _GRANICA_MARGIN of boundary."""
-    if boundary == 0:
-        return False
-    return abs(value - boundary) / abs(boundary) <= _GRANICA_MARGIN
 
 
 def assess_all_statuses(df: pd.DataFrame) -> pd.DataFrame:
@@ -774,7 +764,7 @@ def print_phase3_summary(status_df: pd.DataFrame) -> None:
     status_df = status_df.sort_values(["_group_order", "marker_id"])
 
     current_group = None
-    counts = {"OK": 0, "GRANICA OPT": 0,
+    counts = {"OK": 0,
               "POWYŻEJ NORMY": 0, "PONIŻEJ NORMY": 0, "BRAK DANYCH": 0,
               "WARTOŚĆ PROGOWA": 0}
 
@@ -817,10 +807,12 @@ def print_phase3_summary(status_df: pd.DataFrame) -> None:
     if len(lab_out):
         tier_counts = lab_out["deviation_tier"].value_counts().to_dict()
         mild = int(tier_counts.get("mild", 0))
+        moderate = int(tier_counts.get("moderate", 0))
         severe = int(tier_counts.get("severe", 0))
         print(f"\n--- Out-of-lab deviation tiers ---")
-        print(f"  {'out_of_lab_mild':20s}: {mild}")
-        print(f"  {'out_of_lab_severe':20s}: {severe}")
+        print(f"  {'out_of_lab_mild (<10%)':25s}: {mild}")
+        print(f"  {'out_of_lab_moderate (10-25%)':25s}: {moderate}")
+        print(f"  {'out_of_lab_severe (>25%)':25s}: {severe}")
 
     # Highlight items requiring attention
     attention = status_df[status_df["severity"].isin(["high", "moderate"])]
@@ -982,7 +974,7 @@ def _interpret_direction(
     Uses the current status to determine which direction is beneficial:
     - PONIŻEJ (NORMY or OPT): rising is improvement
     - POWYŻEJ (NORMY or OPT): falling is improvement
-    - OK / GRANICA OPT / other: stable or moving toward optimal = poprawa
+    - OK / other: stable or moving toward optimal = poprawa
     """
     if abs(delta_pct) < _STABLE_DELTA_PCT:
         return "stabilny"
@@ -994,7 +986,7 @@ def _interpret_direction(
     if "POWYŻEJ" in status:
         return "poprawa" if not rising else "pogorszenie"
 
-    # OK or GRANICA OPT — any significant movement away from OK could be
+    # OK — any significant movement away from OK could be
     # worsening, but we can't be sure without knowing which bound matters.
     # Report raw direction instead of a clinical judgment.
     return "wzrost" if rising else "spadek"
@@ -1595,7 +1587,7 @@ def generate_recommendations(
                     ]
                     if ch_val is not None and len(ch_rows):
                         ch_high = ch_rows.iloc[0]["lab_high"]
-                        _ok_statuses = {"OK", "GRANICA OPT"}
+                        _ok_statuses = {"OK"}
                         ldl_status = _status_of("cholesterol_ldl__direct")
                         apob_status = _status_of("apo_b__direct")
                         ldl_ok = ldl_status in _ok_statuses
@@ -1764,10 +1756,11 @@ def generate_recommendations(
             confidence="high",
         ))
 
-    # Selenium borderline
-    if "GRANICA" in _status("selen__direct") or "PONIŻEJ" in _status("selen__direct"):
-        val = _latest("selen__direct")
-        val_str = f" ({val:.0f} µg/l)" if val else ""
+    # Selenium below optimal
+    selen_val = _latest("selen__direct")
+    selen_opt_low = MARKERS.get("selen__direct", {}).get("optimal_low")
+    if selen_val is not None and selen_opt_low is not None and selen_val < selen_opt_low:
+        val_str = f" ({selen_val:.0f} µg/l)"
         recs.append(_rec(
             category=_CAT_SUPPLEMENT,
             priority=_PRIORITY_LOW,
@@ -2330,7 +2323,8 @@ def build_specialist_context(
 
             status_icon = _STATUS_ICONS.get(srow["status"], "")
             dev_tier = srow.get("deviation_tier")
-            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier)
+            dev_pct = srow.get("deviation_pct")
+            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier, dev_pct)
             markers_data.append({
                 "marker_id": mid,
                 "label": srow["marker_label_pl"],
@@ -2343,7 +2337,7 @@ def build_specialist_context(
                 "status": srow["status"],
                 "status_color": _STATUS_COLORS.get(srow["status"], "#94a3b8"),
                 "status_icon": status_icon,
-                "deviation_pct": srow.get("deviation_pct"),
+                "deviation_pct": dev_pct,
                 "deviation_tier": dev_tier,
                 "badge_class": badge_meta["badge_class"],
                 "badge_label": badge_meta["badge_label"],
@@ -2398,11 +2392,13 @@ def build_specialist_context(
             srow = rows.iloc[0]
             status = srow["status"]
             dev_tier = srow.get("deviation_tier")
+            dev_pct = srow.get("deviation_pct")
         else:
             status = ""
             dev_tier = None
+            dev_pct = None
         status_icon = _STATUS_ICONS.get(status, "")
-        badge_meta = _status_badge_meta(status, status_icon, dev_tier)
+        badge_meta = _status_badge_meta(status, status_icon, dev_tier, dev_pct)
         trigger_markers.append({
             "label": label,
             "status": status,
@@ -2434,7 +2430,6 @@ def build_specialist_context(
 # Status → CSS class / display colour
 _STATUS_COLORS: dict[str, str] = {
     "OK": "#22c55e",
-    "GRANICA OPT": "#eab308",
     "POWYŻEJ NORMY": "#ef4444",
     "PONIŻEJ NORMY": "#ef4444",
     "BRAK DANYCH": "#94a3b8",
@@ -2443,7 +2438,6 @@ _STATUS_COLORS: dict[str, str] = {
 
 _STATUS_ICONS: dict[str, str] = {
     "OK": "✓",
-    "GRANICA OPT": "~",
     "POWYŻEJ NORMY": "⬆",
     "PONIŻEJ NORMY": "⬇",
     "BRAK DANYCH": "?",
@@ -2454,6 +2448,7 @@ def _status_badge_meta(
     status: str,
     status_icon: str,
     deviation_tier: str | None,
+    deviation_pct: float | None = None,
 ) -> dict:
     """Compute badge CSS class + display label for a marker status.
 
@@ -2468,18 +2463,22 @@ def _status_badge_meta(
 
     if status == "OK":
         return {"badge_class": "badge-ok", "badge_label": f"{prefix}{status}"}
-    if status == "GRANICA OPT":
-        return {"badge_class": "badge-granica", "badge_label": f"{prefix}{status}"}
     if status in ("POWYŻEJ NORMY", "PONIŻEJ NORMY"):
+        pct_str = f"{deviation_pct:.0f}%" if deviation_pct is not None else ""
         if deviation_tier == "mild":
             return {
                 "badge_class": "badge-normy-mild",
-                "badge_label": f"{prefix}{status} (<10%)",
+                "badge_label": f"{prefix}{status} ({pct_str})",
+            }
+        if deviation_tier == "moderate":
+            return {
+                "badge_class": "badge-normy-moderate",
+                "badge_label": f"{prefix}{status} ({pct_str})",
             }
         if deviation_tier == "severe":
             return {
                 "badge_class": "badge-normy-severe",
-                "badge_label": f"{prefix}{status} (\u226510%)",
+                "badge_label": f"{prefix}{status} ({pct_str})",
             }
         return {"badge_class": "badge-normy", "badge_label": f"{prefix}{status}"}
     return {"badge_class": "badge-unknown", "badge_label": f"{prefix}{status}"}
@@ -2721,7 +2720,8 @@ def _build_group_sections(
 
             status_icon = _STATUS_ICONS.get(srow["status"], "")
             dev_tier = srow.get("deviation_tier")
-            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier)
+            dev_pct = srow.get("deviation_pct")
+            badge_meta = _status_badge_meta(srow["status"], status_icon, dev_tier, dev_pct)
             markers_data.append({
                 "marker_id": mid,
                 "label": srow["marker_label_pl"],
@@ -2804,7 +2804,6 @@ def _build_dashboard(status_df: pd.DataFrame, trend_df: pd.DataFrame) -> dict:
     """Build dashboard summary statistics."""
     total = len(status_df)
     ok = (status_df["status"] == "OK").sum()
-    borderline = (status_df["status"] == "GRANICA OPT").sum()
     out_of_lab = status_df["status"].isin(["POWYŻEJ NORMY", "PONIŻEJ NORMY"]).sum()
 
     worsening = trend_df[
@@ -2819,7 +2818,6 @@ def _build_dashboard(status_df: pd.DataFrame, trend_df: pd.DataFrame) -> dict:
     return {
         "total_markers": total,
         "ok_count": int(ok),
-        "borderline_count": int(borderline),
         "out_of_lab_count": int(out_of_lab),
         "ok_pct": round(ok / total * 100) if total else 0,
         "worsening_count": len(worsening),
