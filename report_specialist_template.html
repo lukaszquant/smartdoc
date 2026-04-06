@@ -208,7 +208,7 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 20px 0 10px; }
           <td class="trend">
             {% if m.direction %}
             <span style="color:{{ m.direction_color }}">{{ m.math_arrow }} {{ m.delta_pct }} {{ m.direction_arrow }}</span>
-            <br><span style="font-size:0.75rem">n={{ m.n_measurements }}, {{ m.confidence }}, {{ m.collected_date }}</span>
+            <br><span style="font-size:0.75rem">n={{ m.n_measurements }}, {{ m.trend_state }}, {{ m.collected_date }}</span>
             {% else %}<span style="font-size:0.75rem">{{ m.collected_date }}</span>{% endif %}
           </td>
           <td>

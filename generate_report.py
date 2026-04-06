@@ -2351,8 +2351,7 @@ def build_specialist_context(
                 "severity": srow["severity"],
                 "is_trigger": mid in trigger_set,
                 "n_measurements": (
-                    int(trend_row.get("total_observations",
-                                      trend_row["n_measurements"]))
+                    int(trend_row["total_observations"])
                     if trend_row is not None else 1
                 ),
                 "direction": (
@@ -2377,8 +2376,8 @@ def build_specialist_context(
                     f"{trend_row['delta_pct']:+.1f}%"
                     if trend_row is not None else ""
                 ),
-                "confidence": (
-                    trend_row["confidence"] if trend_row is not None else "none"
+                "trend_state": (
+                    trend_row["trend_state"] if trend_row is not None else "insufficient"
                 ),
                 "chart_html": chart_html,
                 "collected_date": str(srow["collected_date"]),
