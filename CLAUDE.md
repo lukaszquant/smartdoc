@@ -18,17 +18,18 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 | `generate_report.py` | Main script (~2180 lines) — all 6 phases |
 | `config.json` | Local config for data paths (gitignored, see `config.example.json`) |
 | `config.example.json` | Example config template with default relative paths |
-| `pdf_parser.py` | PDF extraction layer — OCR (Diagnostyka, Read-Gene) + pdfplumber (Omega) |
+| `pdf_parser.py` | PDF extraction layer — OCR (Diagnostyka, Read-Gene) + pdfplumber (Omega), with per-file cache |
 | `marker_catalog.py` | `MARKERS` dict (canonical marker definitions, optimal ranges, units) and `GROUPS` |
 | `report_template.html` | Jinja2 HTML template with Plotly chart rendering |
 | `wynki_diag/` | Input CSV data (sensitive, gitignored) |
 | `wyniki_pdf/` | Input PDF data (sensitive, gitignored) |
+| `.pdf_cache/` | Per-PDF extraction cache (sensitive, gitignored) |
 | `raport_zdrowotny.html` | Generated output (sensitive, gitignored) |
 | `PLAN/` | Plans and reviews, organized by feature and version |
 | `PLAN/ANALIZY/v1/` | Original project plan in Polish |
 | `PLAN/PDF_INGESTION/` | PDF ingestion plans, reviews, validations (v1–v3) |
 | `PLAN/SPECIALIST_RECS/` | Specialist recommendations plan and review |
-| `NOTES/` | Implementation notes per phase (NOTES_PHASE1–6.md) |
+| `NOTES/` | Implementation notes (NOTES_PHASE1–6.md, NOTES_PDF_CACHE.md) |
 
 ## Tech stack
 
@@ -56,9 +57,12 @@ Copy `config.example.json` to `config.json` and adjust paths. All paths can be a
 {
   "data_dir": "/path/to/wynki_diag",
   "pdf_dir": "/path/to/wyniki_pdf",
-  "output_path": "raport_zdrowotny.html"
+  "output_path": "raport_zdrowotny.html",
+  "pdf_cache_dir": ".pdf_cache"
 }
 ```
+
+Set `SMARTDOC_NO_PDF_CACHE=1` to disable the PDF extraction cache for a run.
 
 ## Running temporary test scripts
 
@@ -83,6 +87,16 @@ Always use `_tmp*.py` for quick checks (dependency availability, data exploratio
 ```
 
 pytest is not installed in `.venv/`. Use `unittest discover` for the test suite under `tests/`.
+
+## PDF cache and PARSER_VERSION
+
+`pdf_parser.py` caches per-PDF extraction results in `.pdf_cache/`. The cache is keyed by relative source path and validated by file fingerprint (size + mtime, SHA-1 fallback).
+
+**When editing `pdf_parser.py`, bump `PARSER_VERSION`** if your change alters:
+- the row schema returned by any parser (`_parse_diagnostyka`, `_parse_readgene`, `_parse_omega`)
+- the format detection logic in `_detect_format` or `_classify_text` (e.g. making a previously-`unknown` file parseable)
+
+Forgetting to bump will cause stale cached rows or stale skip-format decisions to persist silently.
 
 ## Sensitive data
 

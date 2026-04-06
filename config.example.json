@@ -1,5 +1,6 @@
 {
   "data_dir": "wynki_diag",
   "pdf_dir": "wyniki_pdf",
-  "output_path": "raport_zdrowotny.html"
+  "output_path": "raport_zdrowotny.html",
+  "pdf_cache_dir": ".pdf_cache"
 }

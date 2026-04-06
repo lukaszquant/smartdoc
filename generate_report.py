@@ -51,6 +51,9 @@ PDF_DIR = Path(_CFG.get("pdf_dir", _SCRIPT_DIR / "wyniki_pdf"))
 OUTPUT_PATH = Path(_CFG.get("output_path", "raport_zdrowotny.html"))
 if not OUTPUT_PATH.is_absolute():
     OUTPUT_PATH = _SCRIPT_DIR / OUTPUT_PATH
+PDF_CACHE_DIR = Path(_CFG.get("pdf_cache_dir", ".pdf_cache"))
+if not PDF_CACHE_DIR.is_absolute():
+    PDF_CACHE_DIR = _SCRIPT_DIR / PDF_CACHE_DIR
 
 for _label, _dir in [("data_dir", DATA_DIR), ("pdf_dir", PDF_DIR)]:
     if not _dir.is_dir():
@@ -180,8 +183,10 @@ def load_all_data() -> pd.DataFrame:
     """Load CSV data and, if available, PDF data; return combined DataFrame."""
     csv_df = load_raw_data()
     if PDF_DIR.exists():
+        import os
         from pdf_parser import load_pdf_data
-        pdf_df = load_pdf_data(PDF_DIR)
+        use_cache = os.environ.get("SMARTDOC_NO_PDF_CACHE", "") != "1"
+        pdf_df = load_pdf_data(PDF_DIR, cache_dir=PDF_CACHE_DIR, use_cache=use_cache)
         if not pdf_df.empty:
             LOG.info("PDF data: %d rows from %d files",
                      len(pdf_df), pdf_df["source_file"].nunique())

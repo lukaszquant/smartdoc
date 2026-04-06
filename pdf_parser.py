@@ -16,7 +16,10 @@ normalize_records() in generate_report.py.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -28,6 +31,12 @@ import pandas as pd
 import pdfplumber
 
 LOG = logging.getLogger("smartdoc.pdf")
+
+# Cache schema version — covers both the parser row layout AND the format
+# detector. Bump when parser output changes OR when _detect_format() is changed
+# in a way that could reclassify previously-seen PDFs (e.g. making a file that
+# was "unknown" parseable). Stale cache entries are then ignored.
+PARSER_VERSION = 1
 
 # ---------------------------------------------------------------------------
 # OCR helper
@@ -560,10 +569,177 @@ def _parse_omega(pdf_path: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _cache_key(pdf_path: Path, pdf_root: Path) -> str:
+    """SHA-1 hash of the PDF's path relative to pdf_root (POSIX-style)."""
+    rel = pdf_path.relative_to(pdf_root).as_posix()
+    return hashlib.sha1(rel.encode("utf-8")).hexdigest()
+
+
+def _sha1_file(path: Path) -> str:
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _fingerprint(pdf_path: Path, *, include_sha1: bool) -> dict:
+    stat = pdf_path.stat()
+    fp = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    if include_sha1:
+        fp["sha1"] = _sha1_file(pdf_path)
+    return fp
+
+
+def _serialize_cache_rows(rows: list[dict]) -> list[dict]:
+    serialized = []
+    for row in rows:
+        out = dict(row)
+        ca = out.get("collected_at")
+        if isinstance(ca, datetime):
+            out["collected_at"] = ca.isoformat()
+        elif ca is None:
+            out["collected_at"] = None
+        serialized.append(out)
+    return serialized
+
+
+def _deserialize_cache_rows(rows: list[dict]) -> list[dict]:
+    deserialized = []
+    for row in rows:
+        out = dict(row)
+        ca = out.get("collected_at")
+        if isinstance(ca, str):
+            try:
+                out["collected_at"] = datetime.fromisoformat(ca)
+            except ValueError:
+                out["collected_at"] = None
+        deserialized.append(out)
+    return deserialized
+
+
+def _root_namespace(pdf_root: Path) -> str:
+    """SHA-1 (prefix) of the resolved pdf_root path, used to scope cache files
+    so that two different pdf_dirs never share cache entries.
+    """
+    resolved = str(pdf_root.resolve())
+    return hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:16]
+
+
+def _cache_path(pdf_path: Path, pdf_root: Path, cache_dir: Path) -> Path:
+    return cache_dir / _root_namespace(pdf_root) / f"{_cache_key(pdf_path, pdf_root)}.json"
+
+
+def _cache_load(pdf_path: Path, pdf_root: Path, cache_dir: Path) -> dict | None:
+    """Return cached parser rows for pdf_path or None on miss.
+
+    On hit via fast-path (size+mtime_ns), returns the cached entry directly.
+    On hit via SHA-1 fallback, refreshes stored size/mtime_ns in the cache file.
+    On any failure (missing, unreadable, version mismatch, content change),
+    returns None.
+    """
+    cache_file = _cache_path(pdf_path, pdf_root, cache_dir)
+    if not cache_file.exists():
+        return None
+
+    try:
+        with open(cache_file, encoding="utf-8") as f:
+            entry = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        LOG.warning("Ignoring unreadable PDF cache for %s: %s", pdf_path.name, exc)
+        return None
+
+    if entry.get("parser_version") != PARSER_VERSION:
+        return None
+
+    cached_fp = entry.get("fingerprint") or {}
+    try:
+        current_fp = _fingerprint(pdf_path, include_sha1=False)
+    except OSError as exc:
+        LOG.warning("Failed to stat %s: %s", pdf_path.name, exc)
+        return None
+
+    if (cached_fp.get("size") == current_fp["size"]
+            and cached_fp.get("mtime_ns") == current_fp["mtime_ns"]):
+        entry["rows"] = _deserialize_cache_rows(entry.get("rows", []))
+        return entry
+
+    # Fallback: compare content SHA-1
+    cached_sha1 = cached_fp.get("sha1")
+    if not cached_sha1:
+        return None
+    try:
+        current_sha1 = _sha1_file(pdf_path)
+    except OSError as exc:
+        LOG.warning("Failed to hash %s: %s", pdf_path.name, exc)
+        return None
+    if current_sha1 != cached_sha1:
+        return None
+
+    # Content unchanged: refresh metadata in cache file.
+    entry["fingerprint"] = {
+        "size": current_fp["size"],
+        "mtime_ns": current_fp["mtime_ns"],
+        "sha1": cached_sha1,
+    }
+    try:
+        _atomic_write_json(cache_file, entry)
+    except OSError as exc:
+        LOG.warning("Failed to refresh cache metadata for %s: %s", pdf_path.name, exc)
+
+    entry["rows"] = _deserialize_cache_rows(entry.get("rows", []))
+    return entry
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise
+
+
+def _cache_store(pdf_path: Path, pdf_root: Path, cache_dir: Path,
+                 fmt: str, rows: list[dict]) -> None:
+    try:
+        fp = _fingerprint(pdf_path, include_sha1=True)
+    except OSError as exc:
+        LOG.warning("Failed to fingerprint %s: %s", pdf_path.name, exc)
+        return
+    entry = {
+        "source_path": pdf_path.relative_to(pdf_root).as_posix(),
+        "fingerprint": fp,
+        "format": fmt,
+        "parsed_at": datetime.now().isoformat(timespec="seconds"),
+        "parser_version": PARSER_VERSION,
+        "rows": _serialize_cache_rows(rows),
+    }
+    cache_file = _cache_path(pdf_path, pdf_root, cache_dir)
+    try:
+        _atomic_write_json(cache_file, entry)
+    except OSError as exc:
+        LOG.warning("Failed to write PDF cache for %s: %s", pdf_path.name, exc)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def load_pdf_data(pdf_dir: Path) -> pd.DataFrame:
+def load_pdf_data(
+    pdf_dir: Path,
+    *,
+    cache_dir: Path | None = None,
+    use_cache: bool = True,
+) -> pd.DataFrame:
     """Discover and parse all PDF files, returning canonical DataFrame.
 
     Output schema matches post-load_raw_data():
@@ -584,23 +760,59 @@ def load_pdf_data(pdf_dir: Path) -> pd.DataFrame:
     }
     skip_formats = {"genetic", "historia", "unknown"}
 
-    for pdf_path in pdf_files:
-        fmt = _detect_format(pdf_path)
-        if fmt in skip_formats:
-            LOG.info("Skipping %s (format: %s)", pdf_path.name, fmt)
-            continue
-
-        parser = parsers.get(fmt)
-        if not parser:
-            LOG.warning("No parser for format %s (%s)", fmt, pdf_path.name)
-            continue
-
+    cache_active = use_cache and cache_dir is not None
+    if cache_active:
         try:
-            raw_rows = parser(pdf_path)
-            LOG.info("Parsed %d rows from %s (%s)", len(raw_rows), pdf_path.name, fmt)
-        except Exception as exc:
-            LOG.warning("Failed to parse %s: %s", pdf_path.name, exc)
-            continue
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            LOG.warning("Cannot create PDF cache dir %s: %s — disabling cache", cache_dir, exc)
+            cache_active = False
+    if not cache_active and not use_cache:
+        LOG.info("PDF cache disabled")
+
+    hits = 0
+    misses = 0
+    skipped_format = 0
+
+    for pdf_path in pdf_files:
+        cached = None
+        if cache_active:
+            cached = _cache_load(pdf_path, pdf_dir, cache_dir)
+
+        if cached is not None:
+            fmt = cached.get("format", "unknown")
+            raw_rows = cached.get("rows", [])
+            hits += 1
+            LOG.debug("PDF cache hit: %s", pdf_path.name)
+            if fmt in skip_formats:
+                skipped_format += 1
+                continue
+        else:
+            LOG.info("PDF cache miss, parsing: %s", pdf_path.name)
+            fmt = _detect_format(pdf_path)
+            if fmt in skip_formats:
+                LOG.info("Skipping %s (format: %s)", pdf_path.name, fmt)
+                if cache_active:
+                    _cache_store(pdf_path, pdf_dir, cache_dir, fmt, [])
+                misses += 1
+                skipped_format += 1
+                continue
+
+            parser = parsers.get(fmt)
+            if not parser:
+                LOG.warning("No parser for format %s (%s)", fmt, pdf_path.name)
+                continue
+
+            try:
+                raw_rows = parser(pdf_path)
+                LOG.info("Parsed %d rows from %s (%s)", len(raw_rows), pdf_path.name, fmt)
+            except Exception as exc:
+                LOG.warning("Failed to parse %s: %s", pdf_path.name, exc)
+                continue
+
+            if cache_active:
+                _cache_store(pdf_path, pdf_dir, cache_dir, fmt, raw_rows)
+            misses += 1
 
         # Canonicalize into post-load_raw_data() schema
         for row in raw_rows:
@@ -629,6 +841,10 @@ def load_pdf_data(pdf_dir: Path) -> pd.DataFrame:
                 "collected_date": collected_at.date() if collected_at else None,
                 "source_origin": "pdf",
             })
+
+    if cache_active:
+        LOG.info("PDF cache: %d hits, %d misses, %d skipped-format",
+                 hits, misses, skipped_format)
 
     if not all_rows:
         return pd.DataFrame()

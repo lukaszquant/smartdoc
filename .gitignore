@@ -6,6 +6,9 @@ raport_konsultacja_*.html
 raport_zdrowotny.pdf
 raport_konsultacja_*.pdf
 
+# PDF extraction cache (contains sensitive extracted rows)
+.pdf_cache/
+
 # Python
 __pycache__/
 *.pyc
