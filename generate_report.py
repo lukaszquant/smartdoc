@@ -566,8 +566,7 @@ def assess_status(
     -------
     dict with keys:
         status          — "OK", "POWYŻEJ NORMY", "PONIŻEJ NORMY",
-                           "POWYŻEJ OPT", "PONIŻEJ OPT", "GRANICA OPT",
-                           "BRAK DANYCH", "WARTOŚĆ PROGOWA"
+                           "GRANICA OPT", "BRAK DANYCH", "WARTOŚĆ PROGOWA"
         severity        — "none", "low", "moderate", "high", "unknown"
         basis           — "lab", "optimal", "data_quality", "threshold"
         detail          — optional clarification string
@@ -638,8 +637,8 @@ def assess_status(
             return {"status": "GRANICA OPT", "severity": "low",
                     "basis": "optimal", "detail": "blisko dolnej granicy",
                     "deviation_pct": None, "deviation_tier": None}
-        return {"status": "PONIŻEJ OPT", "severity": "moderate",
-                "basis": "optimal", "detail": "",
+        return {"status": "OK", "severity": "none",
+                "basis": "optimal", "detail": "poniżej zakresu optymalnego",
                 "deviation_pct": None, "deviation_tier": None}
 
     if above_opt:
@@ -647,8 +646,8 @@ def assess_status(
             return {"status": "GRANICA OPT", "severity": "low",
                     "basis": "optimal", "detail": "blisko górnej granicy",
                     "deviation_pct": None, "deviation_tier": None}
-        return {"status": "POWYŻEJ OPT", "severity": "moderate",
-                "basis": "optimal", "detail": "",
+        return {"status": "OK", "severity": "none",
+                "basis": "optimal", "detail": "powyżej zakresu optymalnego",
                 "deviation_pct": None, "deviation_tier": None}
 
     # Within optimal range → OK (no inside-range GRANICA)
@@ -775,7 +774,7 @@ def print_phase3_summary(status_df: pd.DataFrame) -> None:
     status_df = status_df.sort_values(["_group_order", "marker_id"])
 
     current_group = None
-    counts = {"OK": 0, "GRANICA OPT": 0, "POWYŻEJ OPT": 0, "PONIŻEJ OPT": 0,
+    counts = {"OK": 0, "GRANICA OPT": 0,
               "POWYŻEJ NORMY": 0, "PONIŻEJ NORMY": 0, "BRAK DANYCH": 0,
               "WARTOŚĆ PROGOWA": 0}
 
@@ -2436,8 +2435,6 @@ def build_specialist_context(
 _STATUS_COLORS: dict[str, str] = {
     "OK": "#22c55e",
     "GRANICA OPT": "#eab308",
-    "POWYŻEJ OPT": "#f97316",
-    "PONIŻEJ OPT": "#f97316",
     "POWYŻEJ NORMY": "#ef4444",
     "PONIŻEJ NORMY": "#ef4444",
     "BRAK DANYCH": "#94a3b8",
@@ -2447,8 +2444,6 @@ _STATUS_COLORS: dict[str, str] = {
 _STATUS_ICONS: dict[str, str] = {
     "OK": "✓",
     "GRANICA OPT": "~",
-    "POWYŻEJ OPT": "↑",
-    "PONIŻEJ OPT": "↓",
     "POWYŻEJ NORMY": "⬆",
     "PONIŻEJ NORMY": "⬇",
     "BRAK DANYCH": "?",
@@ -2475,8 +2470,6 @@ def _status_badge_meta(
         return {"badge_class": "badge-ok", "badge_label": f"{prefix}{status}"}
     if status == "GRANICA OPT":
         return {"badge_class": "badge-granica", "badge_label": f"{prefix}{status}"}
-    if status in ("POWYŻEJ OPT", "PONIŻEJ OPT"):
-        return {"badge_class": "badge-opt", "badge_label": f"{prefix}{status}"}
     if status in ("POWYŻEJ NORMY", "PONIŻEJ NORMY"):
         if deviation_tier == "mild":
             return {
@@ -2555,6 +2548,11 @@ def generate_plotly_chart(
     dates_all = mdf["collected_at"]
     x_min = dates_all.min()
     x_max = dates_all.max()
+    # Add 3% padding on each side so edge markers aren't clipped
+    x_span = (x_max - x_min) if x_max != x_min else pd.Timedelta(days=30)
+    x_pad = x_span * 0.03
+    x_min = x_min - x_pad
+    x_max = x_max + x_pad
     lab_low = status_row["lab_low"] if status_row is not None else None
     lab_high = status_row["lab_high"] if status_row is not None else None
     opt_low = status_row.get("optimal_low") if status_row is not None else None
@@ -2807,7 +2805,6 @@ def _build_dashboard(status_df: pd.DataFrame, trend_df: pd.DataFrame) -> dict:
     total = len(status_df)
     ok = (status_df["status"] == "OK").sum()
     borderline = (status_df["status"] == "GRANICA OPT").sum()
-    above_opt = status_df["status"].isin(["POWYŻEJ OPT", "PONIŻEJ OPT"]).sum()
     out_of_lab = status_df["status"].isin(["POWYŻEJ NORMY", "PONIŻEJ NORMY"]).sum()
 
     worsening = trend_df[
@@ -2823,7 +2820,6 @@ def _build_dashboard(status_df: pd.DataFrame, trend_df: pd.DataFrame) -> dict:
         "total_markers": total,
         "ok_count": int(ok),
         "borderline_count": int(borderline),
-        "suboptimal_count": int(above_opt),
         "out_of_lab_count": int(out_of_lab),
         "ok_pct": round(ok / total * 100) if total else 0,
         "worsening_count": len(worsening),
@@ -3186,7 +3182,7 @@ def html_to_pdf(context, html_path: Path, pdf_path: Path) -> None:
         # that clip the most recent data points.
         page.emulate_media(media="print")
         file_url = f"file://{html_path.resolve()}"
-        page.goto(file_url, wait_until="networkidle")
+        page.goto(file_url, wait_until="load")
 
         plotly_available = page.evaluate("() => typeof window.Plotly !== 'undefined'")
         if plotly_available:

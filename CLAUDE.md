@@ -6,7 +6,7 @@ Reusable Python script (`generate_report.py`) that generates an interactive HTML
 
 1. **Data ingestion** — parse semicolon-delimited CSVs from `wynki_diag/` and PDFs from `wyniki_pdf/` (OCR via tesseract for Diagnostyka/Read-Gene, pdfplumber for Omega), normalize dates, handle comparators (`<`, `>`)
 2. **Deduplication** — consolidate duplicate files (e.g. `(1)` suffixes), resolve conflicting values
-3. **Marker catalog** — canonical `marker_id` mapping, optimal ranges (preventive medicine, not just lab norms), status assessment (OK / GRANICA OPT / POWYŻEJ OPT / POWYŻEJ NORMY / etc.)
+3. **Marker catalog** — canonical `marker_id` mapping, optimal ranges (preventive medicine, not just lab norms), status assessment (OK / GRANICA OPT / POWYŻEJ NORMY / PONIŻEJ NORMY / etc.)
 4. **Trend analysis** — Theil–Sen slope + Mann–Kendall test with sufficiency gate, bootstrap CI, same-day collapse; trend states (supported_up/down, no_clear_trend, insufficient)
 5. **Recommendations** — prioritized, Polish-language recs covering diet, supplementation, lifestyle, retesting
 6. **HTML report** — Jinja2 template with Plotly interactive charts, trend summaries, color-coded status badges

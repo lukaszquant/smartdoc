@@ -19,7 +19,7 @@ from generate_report import assess_all_statuses
 class TestLpaStatusWithoutLabRange(unittest.TestCase):
 
     def test_lpa_048_above_optimum_when_lab_range_missing(self):
-        """Lp(a) 0.48 g/L with NaN lab range must be POWYŻEJ OPT, not OK."""
+        """Lp(a) 0.48 g/L with NaN lab range must be OK (above optimal, but no lab violation)."""
         df = pd.DataFrame([{
             "marker_id": "lp_a__direct",
             "marker_label_pl": "Lp(a)",
@@ -35,7 +35,7 @@ class TestLpaStatusWithoutLabRange(unittest.TestCase):
         result = assess_all_statuses(df)
         row = result[result["marker_id"] == "lp_a__direct"].iloc[0]
 
-        self.assertEqual(row["status"], "POWYŻEJ OPT")
+        self.assertEqual(row["status"], "OK")
 
     def test_lpa_below_optimum_is_ok(self):
         """Lp(a) 0.15 g/L with NaN lab range must be OK (below 0.30 cutoff)."""

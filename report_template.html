@@ -288,10 +288,6 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
       <div class="number">{{ dashboard.ok_count }}</div>
       <div class="label">W normie ({{ dashboard.ok_pct }}%)</div>
     </div>
-    <div class="dash-card warn">
-      <div class="number">{{ dashboard.suboptimal_count }}</div>
-      <div class="label">Poza optimum</div>
-    </div>
     {% if dashboard.borderline_count %}
     <div class="dash-card" style="border-top: 3px solid var(--c-yellow)">
       <div class="number" style="color:var(--c-yellow)">{{ dashboard.borderline_count }}</div>
@@ -567,7 +563,6 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
       <tbody>
         <tr><td><span class="badge badge-ok">✓ OK</span></td><td>W zakresie optymalnym</td><td>Brak</td></tr>
         <tr><td><span class="badge badge-granica">~ GRANICA OPT</span></td><td>Tuż przy granicy optimum</td><td>Niska</td></tr>
-        <tr><td><span class="badge badge-opt">↑↓ POZA OPT</span></td><td>Poza zakresem optymalnym, w normie lab</td><td>Umiarkowana</td></tr>
         <tr><td><span class="badge badge-normy-mild">⬆⬇ POZA NORMY (&lt;10%)</span></td><td>Poza normą laboratoryjną, odchylenie &lt;10%</td><td>Umiarkowana</td></tr>
         <tr><td><span class="badge badge-normy-severe">⬆⬇ POZA NORMY (≥10%)</span></td><td>Poza normą laboratoryjną, odchylenie ≥10%</td><td>Wysoka</td></tr>
       </tbody>
