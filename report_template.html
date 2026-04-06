@@ -348,9 +348,16 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
             <span class="badge {{ m.badge_class }}">{{ m.badge_label }}</span>
           </td>
           <td class="trend">
-            {% if m.direction %}
+            {% if m.trend_state in ("supported_up", "supported_down") %}
             <span style="color:{{ m.direction_color }}">{{ m.math_arrow }} {{ m.delta_pct }} {{ m.direction_arrow }}</span>
-            <br><span style="font-size:0.75rem">n={{ m.n_measurements }}, {{ m.confidence }}, {{ m.collected_date }}</span>
+            <br><span style="font-size:0.75rem">n={{ m.n_exact_measurements }} &middot; τ={{ m.tau }} p={{ m.p_value }}</span>
+            <br><span style="font-size:0.7rem; color:var(--c-text-light)">nachyl.: {{ m.sen_slope_per_year }}/rok (95% CI {{ m.slope_ci_low }}…{{ m.slope_ci_high }})</span>
+            {% elif m.trend_state == "no_clear_trend" %}
+            <span style="font-size:0.85rem; color:var(--c-text-light)">brak trendu</span>
+            <br><span style="font-size:0.75rem">Δ={{ m.delta_pct }} (n={{ m.n_exact_measurements }})</span>
+            {% elif m.trend_state == "insufficient" %}
+            <span style="font-size:0.85rem; color:var(--c-text-light)">za mało danych</span>
+            {% if m.delta_pct %}<br><span style="font-size:0.75rem">Δ={{ m.delta_pct }} (n={{ m.n_exact_measurements }})</span>{% endif %}
             {% else %}<span style="font-size:0.75rem">{{ m.collected_date }}</span>{% endif %}
           </td>
           <td>
@@ -387,7 +394,7 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
       <li>
         <span class="trend-arrow bad">{{ t.math_arrow }} {{ t.delta_pct }} {{ t.direction_arrow }}</span>
         <strong>{{ t.label }}</strong>
-        <span class="range">{{ t.confidence }} &middot; {{ t.status }}</span>
+        <span class="range">τ={{ t.tau }} p={{ t.p_value }} &middot; {{ t.status }}</span>
       </li>
       {% endfor %}
     </ul>
@@ -402,7 +409,7 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
       <li>
         <span class="trend-arrow good">{{ t.math_arrow }} {{ t.delta_pct }} {{ t.direction_arrow }}</span>
         <strong>{{ t.label }}</strong>
-        <span class="range">{{ t.confidence }} &middot; {{ t.status }}</span>
+        <span class="range">τ={{ t.tau }} p={{ t.p_value }} &middot; {{ t.status }}</span>
       </li>
       {% endfor %}
     </ul>
@@ -410,7 +417,11 @@ h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
   {% endif %}
 
   <div class="card">
-    <p>Stabilne markery: <strong>{{ trends.stable_count }}</strong></p>
+    <p>Markery bez jednoznacznego trendu: <strong>{{ trends.stable_count }}</strong></p>
+    <p>Markery bez wystarczających danych: <strong>{{ trends.insufficient_count }}</strong></p>
+    <p style="font-size:0.8rem; color:var(--c-text-light); margin-top:8px">
+      Ocena trendu: Theil–Sen + Mann–Kendall; warunek wystarczalności: n≥5 dokładnych pomiarów, okres ≥180 dni, ≥4 unikalne daty, bez zmiany jednostki ani metody.
+    </p>
   </div>
 </section>
 

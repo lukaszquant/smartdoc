@@ -835,37 +835,138 @@ def print_phase3_summary(status_df: pd.DataFrame) -> None:
 # Phase 4: Trend analysis
 # ---------------------------------------------------------------------------
 
-# Minimum absolute delta% to consider a trend non-stable.
+# Minimum absolute delta% to consider a descriptive change non-stable
+# (used by the retest heuristic for no_clear_trend markers).
 _STABLE_DELTA_PCT = 5.0
 
-# Confidence thresholds
-_HIGH_CONFIDENCE_N = 5
-_HIGH_CONFIDENCE_R2 = 0.3
-_HIGH_CONFIDENCE_SPAN_DAYS = 365
+
+def _collapse_same_day(dates: np.ndarray, values: np.ndarray) -> tuple:
+    """Collapse same-day measurements to their median.
+
+    Returns (dates_unique, values_median) sorted by date. Input dates are
+    expected to be comparable (datetime.date or pandas Timestamp). Values on
+    the same date are replaced by their median so that tied x-values do not
+    inflate sample size or depress Mann–Kendall power.
+    """
+    if len(dates) == 0:
+        return dates, values
+    # Normalise to date objects for equality
+    keys = np.array([d.date() if hasattr(d, "date") else d for d in dates])
+    uniq, inv = np.unique(keys, return_inverse=True)
+    out_vals = np.array([np.median(values[inv == i]) for i in range(len(uniq))])
+    return uniq, out_vals
 
 
-def _linear_regression(x: np.ndarray, y: np.ndarray) -> dict:
-    """Fit y = slope*x + intercept via numpy.  Returns slope, intercept, r2."""
-    coeffs = np.polyfit(x, y, 1)
-    slope, intercept = coeffs[0], coeffs[1]
-    y_pred = np.polyval(coeffs, x)
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    return {"slope": slope, "intercept": intercept, "r2": r2}
+def _theil_sen_slope(x: np.ndarray, y: np.ndarray) -> dict:
+    """Compute the Theil–Sen (median-of-pairwise) slope estimator.
 
-
-def _trend_confidence(n: int, r2: float, span_days: int) -> str:
-    """Assign confidence level based on data quality signals."""
+    Returns {"slope", "intercept"}. Pairs with identical x are skipped.
+    Intercept is the median of (y - slope * x).
+    """
+    n = len(x)
     if n < 2:
-        return "none"
+        return {"slope": float("nan"), "intercept": float("nan")}
+    xi, xj = np.meshgrid(x, x, indexing="ij")
+    yi, yj = np.meshgrid(y, y, indexing="ij")
+    dx = xj - xi
+    dy = yj - yi
+    # Upper triangle, exclude diagonal and zero-dx pairs
+    mask = np.triu(np.ones_like(dx, dtype=bool), k=1) & (dx != 0)
+    if not mask.any():
+        return {"slope": float("nan"), "intercept": float("nan")}
+    slopes = dy[mask] / dx[mask]
+    slope = float(np.median(slopes))
+    intercept = float(np.median(y - slope * x))
+    return {"slope": slope, "intercept": intercept}
+
+
+def _mann_kendall(y: np.ndarray) -> dict:
+    """Mann–Kendall trend test.
+
+    Returns {"S", "tau", "p_value", "n_effective"}. Uses exact p-value for
+    n <= 10 (computed by enumerating permutations of ranks of the input),
+    asymptotic z-test with tie correction for n >= 11.
+    """
+    n = len(y)
     if n < 3:
-        return "low"
-    if (n >= _HIGH_CONFIDENCE_N
-            and r2 >= _HIGH_CONFIDENCE_R2
-            and span_days >= _HIGH_CONFIDENCE_SPAN_DAYS):
-        return "high"
-    return "moderate"
+        return {"S": 0.0, "tau": float("nan"), "p_value": float("nan"), "n_effective": n}
+
+    # S statistic
+    S = 0
+    for i in range(n - 1):
+        S += int(np.sum(np.sign(y[i + 1:] - y[i])))
+
+    denom = n * (n - 1) / 2.0
+    tau = S / denom if denom > 0 else float("nan")
+
+    if n <= 10:
+        # Exact p-value via enumeration of sign patterns over rank permutations.
+        # For small n this is cheap. We count, over all permutations of ranks,
+        # how often |S_perm| >= |S_obs|. Ties reduce to ranks via argsort-argsort.
+        from itertools import permutations
+        ranks = np.argsort(np.argsort(y))
+        abs_S = abs(S)
+        total = 0
+        hits = 0
+        for perm in permutations(range(n)):
+            arr = ranks[list(perm)]
+            s = 0
+            for i in range(n - 1):
+                s += int(np.sum(np.sign(arr[i + 1:] - arr[i])))
+            if abs(s) >= abs_S:
+                hits += 1
+            total += 1
+        p_value = hits / total if total > 0 else float("nan")
+    else:
+        # Asymptotic z with tie correction
+        # Variance: n(n-1)(2n+5)/18, subtract sum over ties t*(t-1)*(2t+5)/18
+        unique, counts = np.unique(y, return_counts=True)
+        var_s = n * (n - 1) * (2 * n + 5) / 18.0
+        ties = counts[counts > 1]
+        if len(ties) > 0:
+            var_s -= np.sum(ties * (ties - 1) * (2 * ties + 5)) / 18.0
+        if var_s <= 0:
+            return {"S": float(S), "tau": tau, "p_value": float("nan"), "n_effective": n}
+        if S > 0:
+            z = (S - 1) / np.sqrt(var_s)
+        elif S < 0:
+            z = (S + 1) / np.sqrt(var_s)
+        else:
+            z = 0.0
+        # Two-sided p-value via normal CDF (erf-based, no scipy)
+        from math import erf, sqrt
+        p_value = 2.0 * (1.0 - 0.5 * (1.0 + erf(abs(z) / sqrt(2.0))))
+
+    return {"S": float(S), "tau": float(tau), "p_value": float(p_value), "n_effective": n}
+
+
+def _bootstrap_slope_ci(
+    x: np.ndarray,
+    y: np.ndarray,
+    n_boot: int = 1000,
+    seed: int = 42,
+) -> tuple:
+    """Percentile bootstrap CI for the Theil–Sen slope.
+
+    Returns (lo, hi) at the 2.5%/97.5% percentiles. Resamples record indices
+    with replacement; pairs with identical x within a resample are skipped.
+    """
+    n = len(x)
+    if n < 2:
+        return (float("nan"), float("nan"))
+    rng = np.random.default_rng(seed)
+    slopes = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        xs = x[idx]
+        ys = y[idx]
+        res = _theil_sen_slope(xs, ys)
+        if not np.isnan(res["slope"]):
+            slopes.append(res["slope"])
+    if len(slopes) == 0:
+        return (float("nan"), float("nan"))
+    lo, hi = np.percentile(slopes, [2.5, 97.5])
+    return (float(lo), float(hi))
 
 
 def _interpret_direction(
@@ -905,10 +1006,12 @@ def analyze_trends(df: pd.DataFrame, status_df: pd.DataFrame) -> pd.DataFrame:
 
     Returns
     -------
-    DataFrame with one row per marker_id:
-        marker_id, marker_label_pl, group, n_measurements, first_date,
-        last_date, span_days, first_value, last_value, delta_abs, delta_pct,
-        slope_per_year, r2, confidence, direction, status
+    DataFrame with one row per marker_id. Robust trend fields
+    (trend_state ∈ {insufficient, no_clear_trend, supported_up, supported_down})
+    computed via Theil–Sen slope + Mann–Kendall test gated by a sufficiency
+    rule (n≥5 exact points, span≥180d, ≥4 unique dates, no unit change,
+    no method_or_range_change). `direction` carries the clinical label
+    (poprawa/pogorszenie/wzrost/spadek) only for supported states.
     """
     status_map = dict(zip(status_df["marker_id"], status_df["status"]))
 
@@ -917,6 +1020,16 @@ def analyze_trends(df: pd.DataFrame, status_df: pd.DataFrame) -> pd.DataFrame:
     # recommendation wording so threshold-heavy markers like eGFR are not
     # described as "single measurement".
     total_obs_counts = all_numeric.groupby("marker_id").size()
+
+    # Method/range change detection — check source df (any record, even
+    # threshold-filtered ones, because the flag is about comparability of the
+    # entire series).
+    qf_col = df.get("quality_flags")
+    method_change_markers = set()
+    if qf_col is not None:
+        method_mask = qf_col.fillna("").str.contains("method_or_range_change", na=False)
+        if method_mask.any():
+            method_change_markers = set(df.loc[method_mask, "marker_id"].dropna().unique())
 
     # Exclude threshold values — their numeric_value is a bound, not exact
     valid = all_numeric[all_numeric["comparator"] == ""].copy()
@@ -931,10 +1044,24 @@ def analyze_trends(df: pd.DataFrame, status_df: pd.DataFrame) -> pd.DataFrame:
         values = grp["numeric_value"].values
         dates = grp["collected_at"]
         n = len(values)
+        n_exact = n
 
         first_date = dates.iloc[0].date() if hasattr(dates.iloc[0], "date") else dates.iloc[0]
         last_date = dates.iloc[-1].date() if hasattr(dates.iloc[-1], "date") else dates.iloc[-1]
         span_days = (dates.iloc[-1] - dates.iloc[0]).days
+
+        # Unique collection dates (same-day duplicates counted once)
+        date_keys = [d.date() if hasattr(d, "date") else d for d in dates]
+        n_unique_dates = len(set(date_keys))
+
+        # Unit stability across the series
+        has_unit_change = False
+        if "unit" in grp.columns:
+            units = grp["unit"].dropna().astype(str)
+            units = units[units != ""]
+            has_unit_change = units.nunique() > 1
+
+        has_method_change = marker_id in method_change_markers
 
         first_val = values[0]
         last_val = values[-1]
@@ -946,26 +1073,89 @@ def analyze_trends(df: pd.DataFrame, status_df: pd.DataFrame) -> pd.DataFrame:
         else:
             delta_pct = 0.0
 
-        # Linear regression on days-since-first as x
-        if n >= 2:
-            x_days = np.array([(d - dates.iloc[0]).total_seconds() / 86400
-                               for d in dates])
-            reg = _linear_regression(x_days, values)
-            slope_per_year = reg["slope"] * 365.25
-            r2 = reg["r2"]
-        else:
-            slope_per_year = 0.0
-            r2 = 0.0
+        # --- Robust trend assessment (Patch 2) ----------------------------
+        trend_eligible = (
+            n_exact >= 5
+            and n_unique_dates >= 4
+            and span_days >= 180
+            and not has_unit_change
+            and not has_method_change
+        )
 
-        confidence = _trend_confidence(n, r2, span_days)
+        sen_slope_per_year = float("nan")
+        tau = float("nan")
+        p_value = float("nan")
+        slope_ci_low = float("nan")
+        slope_ci_high = float("nan")
+
+        if trend_eligible:
+            # Collapse same-day duplicates (median) before M-K and Theil–Sen
+            dates_arr = np.array(date_keys)
+            c_dates, c_values = _collapse_same_day(dates_arr, values)
+            # x in days relative to first
+            first_c = c_dates[0]
+            x_days_c = np.array(
+                [(d - first_c).days for d in c_dates], dtype=float
+            )
+            ts = _theil_sen_slope(x_days_c, c_values)
+            sen_slope_per_year = float(ts["slope"]) * 365.25 if not np.isnan(ts["slope"]) else float("nan")
+            mk = _mann_kendall(c_values)
+            tau = mk["tau"]
+            p_value = mk["p_value"]
+            lo, hi = _bootstrap_slope_ci(x_days_c, c_values, n_boot=1000, seed=42)
+            # Report CI in per-year units too
+            slope_ci_low = lo * 365.25 if not np.isnan(lo) else float("nan")
+            slope_ci_high = hi * 365.25 if not np.isnan(hi) else float("nan")
+
+        # Derive trend_state
+        if not trend_eligible:
+            trend_state = "insufficient"
+        else:
+            ci_crosses_zero = not (
+                (slope_ci_low > 0 and slope_ci_high > 0)
+                or (slope_ci_low < 0 and slope_ci_high < 0)
+            )
+            if (
+                np.isnan(p_value)
+                or p_value >= 0.05
+                or ci_crosses_zero
+            ):
+                trend_state = "no_clear_trend"
+            elif tau > 0:
+                trend_state = "supported_up"
+            elif tau < 0:
+                trend_state = "supported_down"
+            else:
+                trend_state = "no_clear_trend"
+
         status = status_map.get(marker_id, "")
-        direction = _interpret_direction(delta_pct, status)
+
+        # Clinical direction — populated only when the trend is statistically
+        # supported. For insufficient/no_clear_trend it stays empty so callers
+        # do not mistake descriptive change for a real trend.
+        if trend_state == "supported_up":
+            if "POWYŻEJ" in status:
+                direction = "pogorszenie"
+            elif "PONIŻEJ" in status:
+                direction = "poprawa"
+            else:
+                direction = "wzrost"
+        elif trend_state == "supported_down":
+            if "POWYŻEJ" in status:
+                direction = "poprawa"
+            elif "PONIŻEJ" in status:
+                direction = "pogorszenie"
+            else:
+                direction = "spadek"
+        else:
+            direction = ""
 
         results.append({
             "marker_id": marker_id,
             "marker_label_pl": label,
             "group": group,
-            "n_measurements": n,
+            "n_exact_measurements": n_exact,
+            "n_unique_dates": n_unique_dates,
             "total_observations": int(total_obs_counts.get(marker_id, n)),
             "first_date": first_date,
             "last_date": last_date,
@@ -974,9 +1164,22 @@ def analyze_trends(df: pd.DataFrame, status_df: pd.DataFrame) -> pd.DataFrame:
             "last_value": last_val,
             "delta_abs": round(delta_abs, 3),
             "delta_pct": round(delta_pct, 1),
-            "slope_per_year": round(slope_per_year, 4),
-            "r2": round(r2, 3),
-            "confidence": confidence,
+            "change_since_first_pct": round(delta_pct, 1),
+            "trend_eligible": trend_eligible,
+            "has_unit_change": has_unit_change,
+            "has_method_change": has_method_change,
+            "sen_slope_per_year": (
+                round(sen_slope_per_year, 4) if not np.isnan(sen_slope_per_year) else float("nan")
+            ),
+            "tau": round(tau, 3) if not np.isnan(tau) else float("nan"),
+            "p_value": round(p_value, 4) if not np.isnan(p_value) else float("nan"),
+            "slope_ci_low": (
+                round(slope_ci_low, 4) if not np.isnan(slope_ci_low) else float("nan")
+            ),
+            "slope_ci_high": (
+                round(slope_ci_high, 4) if not np.isnan(slope_ci_high) else float("nan")
+            ),
+            "trend_state": trend_state,
             "direction": direction,
             "status": status,
         })
@@ -990,19 +1193,25 @@ def print_phase4_summary(trend_df: pd.DataFrame) -> None:
     print("PHASE 4 — TREND ANALYSIS SUMMARY")
     print("=" * 72)
 
-    # Confidence distribution
-    conf_counts = trend_df["confidence"].value_counts()
-    print(f"\n--- Confidence distribution ({len(trend_df)} markers with data) ---")
-    for level in ["high", "moderate", "low", "none"]:
-        if level in conf_counts.index:
-            print(f"  {level:12s}: {conf_counts[level]}")
+    # Trend state distribution (robust: Theil–Sen + Mann–Kendall + gate)
+    state_counts = trend_df["trend_state"].value_counts()
+    print(f"\n--- Trend-state distribution ({len(trend_df)} markers with data) ---")
+    for state in ["supported_up", "supported_down", "no_clear_trend", "insufficient"]:
+        if state in state_counts.index:
+            print(f"  {state:18s}: {state_counts[state]}")
 
-    # Group by direction
-    dir_counts = trend_df["direction"].value_counts()
-    print(f"\n--- Direction distribution ---")
-    for d in ["poprawa", "pogorszenie", "stabilny", "wzrost", "spadek"]:
-        if d in dir_counts.index:
-            print(f"  {d:14s}: {dir_counts[d]}")
+    # Why ineligible breakdown
+    ineligible = trend_df[~trend_df["trend_eligible"]]
+    if len(ineligible):
+        n_short = (ineligible["n_exact_measurements"] < 5).sum()
+        n_span = (ineligible["span_days"] < 180).sum()
+        n_unique = (ineligible["n_unique_dates"] < 4).sum()
+        n_unit = ineligible["has_unit_change"].sum()
+        n_method = ineligible["has_method_change"].sum()
+        print(
+            f"  (ineligible reasons — n<5: {n_short}, span<180d: {n_span}, "
+            f"uniq<4: {n_unique}, unit-change: {n_unit}, method-change: {n_method})"
+        )
 
     # Detailed table by group
     group_order = list(GROUPS.keys())
@@ -1024,17 +1233,22 @@ def print_phase4_summary(trend_df: pd.DataFrame) -> None:
         arrow_dir = "↑" if delta > 0 else "↓" if delta < 0 else "→"
         quality = {"poprawa": "✓", "pogorszenie": "✗"}.get(row["direction"], "")
         arrow = f"{arrow_dir}{quality}" if quality else arrow_dir
-        conf_tag = f"[{row['confidence']}]" if row["confidence"] != "high" else ""
+        state = row["trend_state"]
+        state_tag = "" if state in ("supported_up", "supported_down") else f"[{state}]"
+        if state in ("supported_up", "supported_down"):
+            stat_info = f"τ={row['tau']:+.2f} p={row['p_value']:.2f}"
+        else:
+            stat_info = "              "
 
-        print(f"    {row['marker_label_pl']:35s}  n={row['n_measurements']:2d}  "
+        print(f"    {row['marker_label_pl']:35s}  n={row['n_exact_measurements']:2d}  "
               f"{row['first_value']:>8.2f} → {row['last_value']:>8.2f}  "
-              f"Δ={row['delta_pct']:+6.1f}%  R²={row['r2']:.2f}  "
-              f"{arrow} {row['direction']:14s} {conf_tag}")
+              f"Δ={row['delta_pct']:+6.1f}%  {stat_info}  "
+              f"{arrow} {row['direction']:14s} {state_tag}")
 
-    # Highlight concerning trends (pogorszenie with moderate+ confidence)
+    # Highlight concerning trends: supported direction + clinically harmful
     concerning = trend_df[
-        (trend_df["direction"] == "pogorszenie")
-        & (trend_df["confidence"].isin(["moderate", "high"]))
+        (trend_df["trend_state"].isin(["supported_up", "supported_down"]))
+        & (trend_df["direction"] == "pogorszenie")
     ]
     if len(concerning):
         print(f"\n--- Concerning trends ({len(concerning)}) ---")
@@ -1042,13 +1256,14 @@ def print_phase4_summary(trend_df: pd.DataFrame) -> None:
             a = "↑✗" if row["delta_pct"] > 0 else "↓✗"
             print(f"  {a} {row['marker_label_pl']:35s}  "
                   f"Δ={row['delta_pct']:+.1f}%  "
-                  f"slope/yr={row['slope_per_year']:+.2f}  "
-                  f"[{row['confidence']}]  status: {row['status']}")
+                  f"sen/yr={row['sen_slope_per_year']:+.3f}  "
+                  f"τ={row['tau']:+.2f} p={row['p_value']:.3f}  "
+                  f"status: {row['status']}")
 
-    # Highlight improvements
+    # Highlight improvements: supported direction + clinically beneficial
     improving = trend_df[
-        (trend_df["direction"] == "poprawa")
-        & (trend_df["confidence"].isin(["moderate", "high"]))
+        (trend_df["trend_state"].isin(["supported_up", "supported_down"]))
+        & (trend_df["direction"] == "poprawa")
     ]
     if len(improving):
         print(f"\n--- Improving trends ({len(improving)}) ---")
@@ -1056,8 +1271,9 @@ def print_phase4_summary(trend_df: pd.DataFrame) -> None:
             a = "↑✓" if row["delta_pct"] > 0 else "↓✓"
             print(f"  {a} {row['marker_label_pl']:35s}  "
                   f"Δ={row['delta_pct']:+.1f}%  "
-                  f"slope/yr={row['slope_per_year']:+.2f}  "
-                  f"[{row['confidence']}]  status: {row['status']}")
+                  f"sen/yr={row['sen_slope_per_year']:+.3f}  "
+                  f"τ={row['tau']:+.2f} p={row['p_value']:.3f}  "
+                  f"status: {row['status']}")
 
     print("\n" + "=" * 72)
 
@@ -1302,7 +1518,7 @@ def generate_recommendations(
         if (_status(m) == "PONIŻEJ NORMY"
             and _trend(m) is not None
             and _trend(m)["direction"] == "pogorszenie"
-            and _trend(m)["confidence"] in ("moderate", "high"))
+            and _trend(m)["trend_state"] in ("supported_up", "supported_down"))
     ]
     suppressed_generic_markers = set(cbc_bad) if len(cbc_bad) >= 2 else set()
 
@@ -1347,7 +1563,7 @@ def generate_recommendations(
                     m for m in spec_markers
                     if (trend_cache[m] is not None
                         and trend_cache[m]["direction"] == "pogorszenie"
-                        and trend_cache[m]["confidence"] in ("moderate", "high"))
+                        and trend_cache[m]["trend_state"] in ("supported_up", "supported_down"))
                 ]
 
                 priority = _PRIORITY_HIGH if worsening else _PRIORITY_MODERATE
@@ -1651,11 +1867,13 @@ def generate_recommendations(
         tsh_trend = _trend("tsh__direct")
         trend_note = ""
         rationale_detail = ""
-        if tsh_trend is not None and tsh_trend["direction"] == "pogorszenie":
+        if (tsh_trend is not None
+                and tsh_trend["direction"] == "pogorszenie"
+                and tsh_trend["trend_state"] in ("supported_up", "supported_down")):
             trend_note = " Trend wzrostowy potwierdza dryfowanie w górę."
             rationale_detail = (
                 f"TSH {tsh_val:.2f} z trendem wzrostowym "
-                f"(R²={tsh_trend['r2']:.2f})"
+                f"(τ={tsh_trend['tau']:+.2f}, p={tsh_trend['p_value']:.2f})"
             ) if tsh_val else "TSH z trendem wzrostowym"
         else:
             rationale_detail = (
@@ -1727,7 +1945,7 @@ def generate_recommendations(
     fe_trend = _trend("zelazo__direct")
     if (fe_trend is not None
             and fe_trend["direction"] == "spadek"
-            and fe_trend["confidence"] in ("moderate", "high")
+            and fe_trend["trend_state"] in ("supported_up", "supported_down")
             and abs(fe_trend["delta_pct"]) >= 10):
         fe_val = _latest("zelazo__direct")
         fe_str = f" ({fe_val:.0f} µg/dl)" if fe_val else ""
@@ -1780,10 +1998,16 @@ def generate_recommendations(
     # RETEST — markers worth retesting
     # ===================================================================
 
-    # Worsening trends with low/moderate confidence → retest
+    # no_clear_trend markers whose descriptive first-to-last change looks
+    # clinically concerning → retest to clarify whether a trend is real.
+    def _descriptive_concerning(row) -> bool:
+        if abs(row["delta_pct"]) < _STABLE_DELTA_PCT:
+            return False
+        return _interpret_direction(row["delta_pct"], row["status"]) == "pogorszenie"
+
     retest_worsening = trend_df[
-        (trend_df["direction"] == "pogorszenie")
-        & (trend_df["confidence"].isin(["low", "moderate"]))
+        (trend_df["trend_state"] == "no_clear_trend")
+        & trend_df.apply(_descriptive_concerning, axis=1)
     ]
     if len(retest_worsening):
         markers = list(retest_worsening["marker_id"])
@@ -1793,12 +2017,15 @@ def generate_recommendations(
             priority=_PRIORITY_MODERATE,
             marker_ids=markers,
             text_pl=(
-                f"Powtórzyć badania z trendem pogorszenia i umiarkowaną "
-                f"pewnością, aby potwierdzić lub wykluczyć trend: {labels}."
+                f"Powtórzyć badania, w których zmiana od pierwszego pomiaru "
+                f"wygląda niekorzystnie, ale brak statystycznie potwierdzonego "
+                f"trendu — kolejny pomiar pozwoli rozstrzygnąć, czy trend "
+                f"istnieje: {labels}."
             ),
             rationale_pl=(
-                "Trendy oparte na mniejszej liczbie pomiarów wymagają "
-                "potwierdzenia kolejnym badaniem."
+                "Bez potwierdzonego trendu (Mann–Kendall) opisowa zmiana "
+                "pierwszy→ostatni może być szumem lub dopiero rozwijającym "
+                "się trendem. Dodatkowy pomiar rozstrzyga."
             ),
             evidence="Metodologia analizy trendów",
             confidence="moderate",
@@ -1807,9 +2034,8 @@ def generate_recommendations(
     # Single-measurement markers with abnormal status → retest
     # Use total_observations (includes thresholds) so markers like eGFR with
     # many threshold readings are not falsely described as "single measurement".
-    total_obs_col = "total_observations" if "total_observations" in trend_df.columns else "n_measurements"
     single_abnormal = trend_df[
-        (trend_df[total_obs_col] == 1)
+        (trend_df["total_observations"] == 1)
         & (trend_df["status"].str.contains("PONIŻEJ|POWYŻEJ", na=False))
     ]
     if len(single_abnormal):
@@ -2289,6 +2515,7 @@ def generate_plotly_chart(
     df: pd.DataFrame,
     marker_id: str,
     status_row: pd.Series | None = None,
+    trend_row: pd.Series | None = None,
 ) -> str:
     """Generate an interactive Plotly line chart for a single marker.
 
@@ -2410,6 +2637,42 @@ def generate_plotly_chart(
             text=[f"{row['comparator']}{row['numeric_value']}" for _, row in threshold.iterrows()],
         ))
 
+    # Theil–Sen trendline — only drawn when the robust trend is statistically
+    # supported. Insufficient / no_clear_trend markers stay line-free.
+    if (
+        trend_row is not None
+        and trend_row.get("trend_state") in ("supported_up", "supported_down")
+        and not exact.empty
+    ):
+        ex_sorted = exact.sort_values("collected_at")
+        x_dates_np = np.array(
+            [d.date() if hasattr(d, "date") else d for d in ex_sorted["collected_at"]]
+        )
+        y_vals = ex_sorted["numeric_value"].to_numpy(dtype=float)
+        c_dates, c_vals = _collapse_same_day(x_dates_np, y_vals)
+        first_c = c_dates[0]
+        x_days_c = np.array([(d - first_c).days for d in c_dates], dtype=float)
+        ts = _theil_sen_slope(x_days_c, c_vals)
+        if not np.isnan(ts["slope"]):
+            # Project line over the full date span
+            all_dates_np = np.array(
+                [d.date() if hasattr(d, "date") else d for d in mdf["collected_at"]]
+            )
+            d_min, d_max = min(all_dates_np), max(all_dates_np)
+            x_plot_days = np.array([
+                (d_min - first_c).days, (d_max - first_c).days
+            ], dtype=float)
+            y_plot = ts["intercept"] + ts["slope"] * x_plot_days
+            fig.add_trace(go.Scatter(
+                x=[d_min, d_max],
+                y=y_plot,
+                mode="lines",
+                name="Theil–Sen",
+                line=dict(color="#64748b", width=1.5),
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+
     fig.update_layout(
         title=None,
         xaxis_title=None,
@@ -2448,7 +2711,7 @@ def _build_group_sections(
             trend_rows = trend_df[trend_df["marker_id"] == mid]
             trend_row = trend_rows.iloc[0] if len(trend_rows) else None
 
-            chart_html = generate_plotly_chart(df, mid, srow)
+            chart_html = generate_plotly_chart(df, mid, srow, trend_row)
 
             val = srow["numeric_value"]
             comp = srow["comparator"]
@@ -2472,12 +2735,12 @@ def _build_group_sections(
                 "badge_class": badge_meta["badge_class"],
                 "badge_label": badge_meta["badge_label"],
                 "severity": srow["severity"],
-                "n_measurements": int(trend_row.get("total_observations", trend_row["n_measurements"])) if trend_row is not None else 1,
+                "n_measurements": int(trend_row["total_observations"]) if trend_row is not None else 1,
                 "direction": trend_row["direction"] if trend_row is not None else "",
                 "direction_arrow": (
-                    "" if trend_row["direction"] == "stabilny"
-                    else _DIRECTION_ARROWS.get(trend_row["direction"], "")
-                ) if trend_row is not None else "",
+                    _DIRECTION_ARROWS.get(trend_row["direction"], "")
+                    if trend_row is not None else ""
+                ),
                 "direction_color": _DIRECTION_COLORS.get(
                     trend_row["direction"], "#64748b") if trend_row is not None else "#64748b",
                 "math_arrow": (
@@ -2486,7 +2749,35 @@ def _build_group_sections(
                     else "→"
                 ) if trend_row is not None else "",
                 "delta_pct": f"{trend_row['delta_pct']:+.1f}%" if trend_row is not None else "",
-                "confidence": trend_row["confidence"] if trend_row is not None else "none",
+                "trend_state": trend_row["trend_state"] if trend_row is not None else "insufficient",
+                "tau": (
+                    f"{trend_row['tau']:+.2f}"
+                    if trend_row is not None and pd.notna(trend_row.get("tau"))
+                    else ""
+                ),
+                "p_value": (
+                    f"{trend_row['p_value']:.2f}"
+                    if trend_row is not None and pd.notna(trend_row.get("p_value"))
+                    else ""
+                ),
+                "sen_slope_per_year": (
+                    f"{trend_row['sen_slope_per_year']:+.3f}"
+                    if trend_row is not None and pd.notna(trend_row.get("sen_slope_per_year"))
+                    else ""
+                ),
+                "slope_ci_low": (
+                    f"{trend_row['slope_ci_low']:+.3f}"
+                    if trend_row is not None and pd.notna(trend_row.get("slope_ci_low"))
+                    else ""
+                ),
+                "slope_ci_high": (
+                    f"{trend_row['slope_ci_high']:+.3f}"
+                    if trend_row is not None and pd.notna(trend_row.get("slope_ci_high"))
+                    else ""
+                ),
+                "n_exact_measurements": (
+                    int(trend_row["n_exact_measurements"]) if trend_row is not None else 0
+                ),
                 "chart_html": chart_html,
                 "collected_date": str(srow["collected_date"]),
             })
@@ -2517,11 +2808,11 @@ def _build_dashboard(status_df: pd.DataFrame, trend_df: pd.DataFrame) -> dict:
 
     worsening = trend_df[
         (trend_df["direction"] == "pogorszenie")
-        & (trend_df["confidence"].isin(["moderate", "high"]))
+        & (trend_df["trend_state"].isin(["supported_up", "supported_down"]))
     ]
     improving = trend_df[
         (trend_df["direction"] == "poprawa")
-        & (trend_df["confidence"].isin(["moderate", "high"]))
+        & (trend_df["trend_state"].isin(["supported_up", "supported_down"]))
     ]
 
     return {
@@ -2620,13 +2911,14 @@ def _build_trends_summary(trend_df: pd.DataFrame) -> dict:
     """Build trend summary for dedicated trends section."""
     worsening = trend_df[
         (trend_df["direction"] == "pogorszenie")
-        & (trend_df["confidence"].isin(["moderate", "high"]))
+        & (trend_df["trend_state"].isin(["supported_up", "supported_down"]))
     ].copy()
     improving = trend_df[
         (trend_df["direction"] == "poprawa")
-        & (trend_df["confidence"].isin(["moderate", "high"]))
+        & (trend_df["trend_state"].isin(["supported_up", "supported_down"]))
     ].copy()
-    stable = trend_df[trend_df["direction"] == "stabilny"].copy()
+    stable = trend_df[trend_df["trend_state"] == "no_clear_trend"].copy()
+    insufficient = trend_df[trend_df["trend_state"] == "insufficient"].copy()
 
     def _rows_to_list(sub):
         items = []
@@ -2635,9 +2927,10 @@ def _build_trends_summary(trend_df: pd.DataFrame) -> dict:
             items.append({
                 "label": r["marker_label_pl"],
                 "delta_pct": f"{dp:+.1f}%",
-                "confidence": r["confidence"],
+                "tau": f"{r['tau']:+.2f}" if pd.notna(r["tau"]) else "",
+                "p_value": f"{r['p_value']:.2f}" if pd.notna(r["p_value"]) else "",
                 "status": r["status"],
-                "direction_arrow": "" if r["direction"] == "stabilny" else _DIRECTION_ARROWS.get(r["direction"], ""),
+                "direction_arrow": _DIRECTION_ARROWS.get(r["direction"], ""),
                 "math_arrow": "↑" if dp > 0 else "↓" if dp < 0 else "→",
             })
         return items
@@ -2646,6 +2939,7 @@ def _build_trends_summary(trend_df: pd.DataFrame) -> dict:
         "worsening": _rows_to_list(worsening),
         "improving": _rows_to_list(improving),
         "stable_count": len(stable),
+        "insufficient_count": len(insufficient),
     }
 
 
